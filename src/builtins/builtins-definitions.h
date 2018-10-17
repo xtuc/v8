@@ -203,6 +203,7 @@ namespace internal {
   TFC(ToLength, TypeConversion, 1)                                             \
   TFC(Typeof, Typeof, 1)                                                       \
   TFC(GetSuperConstructor, Typeof, 1)                                          \
+  TFC(ToBigInt64, JavaScriptToWasmTypeConversion, 1)                           \
                                                                                \
   /* Type conversions continuations */                                         \
   TFC(ToBooleanLazyDeoptContinuation, TypeConversionStackParameter, 1)         \
@@ -1237,6 +1238,8 @@ namespace internal {
   TFS(ThrowWasmTrapFloatUnrepresentable)                                       \
   TFS(ThrowWasmTrapFuncInvalid)                                                \
   TFS(ThrowWasmTrapFuncSigMismatch)                                            \
+  TFC(WasmToBigIntJavaScript, WasmToJavaScriptTypeConversion, 1)               \
+  TFC(WasmToBigIntJavaScript_WasmRuntimeTrampoline, TypeConversion, 1)         \
                                                                                \
   /* WeakMap */                                                                \
   TFJ(WeakMapConstructor, SharedFunctionInfo::kDontAdaptArgumentsSentinel)     \
@@ -1497,15 +1500,16 @@ namespace internal {
 
 // Convenience macro listing all wasm runtime stubs. Note that the first few
 // elements of the list coincide with {compiler::TrapId}, order matters.
-#define WASM_RUNTIME_STUB_LIST(V, VTRAP) \
-  FOREACH_WASM_TRAPREASON(VTRAP)         \
-  V(WasmAllocateHeapNumber)              \
-  V(WasmCallJavaScript)                  \
-  V(WasmGrowMemory)                      \
-  V(WasmStackGuard)                      \
-  V(WasmToNumber)                        \
-  V(WasmThrow)                           \
-  V(DoubleToI)
+#define WASM_RUNTIME_STUB_LIST(V, VTRAP)           \
+  FOREACH_WASM_TRAPREASON(VTRAP)                   \
+  V(WasmAllocateHeapNumber)                        \
+  V(WasmCallJavaScript)                            \
+  V(WasmGrowMemory)                                \
+  V(WasmStackGuard)                                \
+  V(WasmToNumber)                                  \
+  V(WasmThrow)                                     \
+  V(DoubleToI)                                     \
+  V(WasmToBigIntJavaScript_WasmRuntimeTrampoline)
 
 // The exception thrown in the following builtins are caught internally and will
 // not be propagated further or re-thrown

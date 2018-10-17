@@ -19,7 +19,7 @@ namespace wasm {
 
 using FunctionSig = Signature<ValueType>;
 std::ostream& operator<<(std::ostream& os, const FunctionSig& function);
-bool IsJSCompatibleSignature(const FunctionSig* sig);
+bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
 
 // Control expressions and blocks.
 #define FOREACH_CONTROL_OPCODE(V)         \

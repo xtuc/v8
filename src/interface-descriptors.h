@@ -77,6 +77,8 @@ namespace internal {
   V(WasmGrowMemory)                   \
   V(WasmThrow)                        \
   V(CloneObjectWithVector)            \
+  V(WasmToJavaScriptTypeConversion)   \
+  V(JavaScriptToWasmTypeConversion)   \
   BUILTIN_LIST_TFS(V)
 
 class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
@@ -1102,6 +1104,25 @@ class WasmThrowDescriptor final : public CallInterfaceDescriptor {
   DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::AnyTagged(),  // result 1
                                     MachineType::AnyTagged())  // kException
   DECLARE_DESCRIPTOR(WasmThrowDescriptor, CallInterfaceDescriptor)
+};
+
+class WasmToJavaScriptTypeConversionDescriptor final
+    : public CallInterfaceDescriptor {
+ public:
+  DEFINE_PARAMETERS_NO_CONTEXT(kArgument)
+  DEFINE_PARAMETER_TYPES(MachineType::IntPtr()) // kArgument
+  DECLARE_DESCRIPTOR(WasmToJavaScriptTypeConversionDescriptor,
+                     CallInterfaceDescriptor)
+};
+
+class JavaScriptToWasmTypeConversionDescriptor final
+    : public CallInterfaceDescriptor {
+ public:
+  DEFINE_PARAMETERS(kArgument)
+  DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::Int64(),     // result 1
+                                    MachineType::AnyTagged()) // kArgument
+  DECLARE_DESCRIPTOR(JavaScriptToWasmTypeConversionDescriptor,
+                     CallInterfaceDescriptor)
 };
 
 class CloneObjectWithVectorDescriptor final : public CallInterfaceDescriptor {
