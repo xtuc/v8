@@ -111,44 +111,11 @@ TF_BUILTIN(WasmGrowMemory, WasmBuiltinsAssembler) {
   ReturnRaw(Int32Constant(-1));
 }
 
-TF_BUILTIN(WasmToBigIntJavaScript_WasmRuntimeTrampoline,
-           WasmBuiltinsAssembler) {
+TF_BUILTIN(WasmNewBigInt, WasmBuiltinsAssembler) {
   TNode<Object> context = UncheckedParameter(Descriptor::kContext);
   TNode<Object> argument = UncheckedParameter(Descriptor::kArgument);
-  TNode<Code> target = LoadBuiltinFromFrame(Builtins::kWasmToBigIntJavaScript);
+  TNode<Code> target = LoadBuiltinFromFrame(Builtins::kNewBigInt);
   TailCallStub(TypeConversionDescriptor(), target, context, argument);
-}
-
-TF_BUILTIN(WasmToBigIntJavaScript, WasmBuiltinsAssembler) {
-  TNode<BigInt> value_bigint;
-
-  TNode<IntPtrT> ptr =
-      UncheckedCast<IntPtrT>(Parameter(Descriptor::kArgument));
-
-  if (Is64()) {
-    value_bigint = BigIntFromInt64(ptr);
-  } else {
-/* #if defined(V8_TARGET_BIG_ENDIAN) */
-/*     TNode<IntPtrT> high = UncheckedCast<IntPtrT>( */
-/*         Load(MachineType::UintPtr(), ptr)); */
-/*     TNode<IntPtrT> low = UncheckedCast<IntPtrT>( */
-/*         Load(MachineType::UintPtr(), ptr, Int32Constant(kPointerSize))); */
-/* #else */
-/*     TNode<IntPtrT> low = UncheckedCast<IntPtrT>( */
-/*         Load(MachineType::UintPtr(), ptr)); */
-/*     TNode<IntPtrT> high = UncheckedCast<IntPtrT>( */
-/*         Load(MachineType::UintPtr(), ptr, Int32Constant(kPointerSize))); */
-/* #endif */
-
-/*     value_bigint = BigIntFromInt32Pair(low, high); */
-
-    // TODO(sven): implement this, but current wasm doesn't support 32 bits arch
-    UNIMPLEMENTED();
-  }
-
-  DCHECK(IsBigInt(value_bigint));
-
-  Return(value_bigint);
 }
 
 #define DECLARE_ENUM(name)                                                    \

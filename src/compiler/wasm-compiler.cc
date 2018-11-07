@@ -4350,20 +4350,12 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
         Operator::kNoProperties,                        // properties
         stub_mode_);                                    // stub call mode
 
-    /**
-     * When calling an imported func the conversion is initiated from wasm and
-     * the target code must be PIC.
-     *
-     * See more details in src/snapshot/snapshot-common.cc +388
-     */
-    auto index = wasm::WasmCode::kWasmToBigIntJavaScript_WasmRuntimeTrampoline;
-
     Node* target = (stub_mode_ == StubCallMode::kCallWasmRuntimeStub)
                        ? mcgraph()->RelocatableIntPtrConstant(
-                             index,
+                             wasm::WasmCode::kWasmNewBigInt,
                              RelocInfo::WASM_STUB_CALL)
                        : jsgraph()->HeapConstant(
-                             BUILTIN_CODE(isolate_, WasmToBigIntJavaScript));
+                             BUILTIN_CODE(isolate_, NewBigInt));
 
     return SetEffect(
         SetControl(graph()->NewNode(mcgraph()->common()->Call(call_descriptor),

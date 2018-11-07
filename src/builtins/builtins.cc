@@ -359,8 +359,7 @@ bool Builtins::IsIsolateIndependent(int index) {
     case kWasmCallJavaScript:
     case kWasmToNumber:
     case kDoubleToI:
-    case kWasmToBigIntJavaScript:
-    case kWasmToBigIntJavaScript_WasmRuntimeTrampoline:
+    case kWasmNewBigInt:
       return true;
     default:
       return false;
