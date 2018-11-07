@@ -63,6 +63,7 @@ class TemplateObjectDescription;
 class UncompiledDataWithoutPreParsedScope;
 class UncompiledDataWithPreParsedScope;
 class WasmExportedFunctionData;
+class WeakFactoryCleanupJobTask;
 struct SourceRange;
 template <typename T>
 class ZoneVector;
@@ -360,7 +361,7 @@ class V8_EXPORT_PRIVATE Factory {
   // Create a symbol in old or read-only space.
   Handle<Symbol> NewSymbol(PretenureFlag pretenure = TENURED);
   Handle<Symbol> NewPrivateSymbol(PretenureFlag pretenure = TENURED);
-  Handle<Symbol> NewPrivateFieldSymbol();
+  Handle<Symbol> NewPrivateNameSymbol();
 
   // Create a global (but otherwise uninitialized) context.
   Handle<NativeContext> NewNativeContext();
@@ -439,6 +440,8 @@ class V8_EXPORT_PRIVATE Factory {
   Handle<PromiseResolveThenableJobTask> NewPromiseResolveThenableJobTask(
       Handle<JSPromise> promise_to_resolve, Handle<JSReceiver> then,
       Handle<JSReceiver> thenable, Handle<Context> context);
+  Handle<WeakFactoryCleanupJobTask> NewWeakFactoryCleanupJobTask(
+      Handle<JSWeakFactory> weak_factory);
 
   Handle<MicrotaskQueue> NewMicrotaskQueue();
 
@@ -776,12 +779,6 @@ class V8_EXPORT_PRIVATE Factory {
       bool is_turbofanned = false, int stack_slots = 0,
       int safepoint_table_offset = 0, int handler_table_offset = 0);
 
-  // Allocates a new, empty code object for use by builtin deserialization. The
-  // given {size} argument specifies the size of the entire code object.
-  // Can only be used when code space is unprotected and requires manual
-  // initialization by the caller.
-  Handle<Code> NewCodeForDeserialization(uint32_t size);
-
   // Allocates a new code object and initializes it as the trampoline to the
   // given off-heap entry point.
   Handle<Code> NewOffHeapTrampolineFor(Handle<Code> code,
@@ -800,15 +797,15 @@ class V8_EXPORT_PRIVATE Factory {
   inline Handle<Object> NewURIError();
 
   Handle<Object> NewError(Handle<JSFunction> constructor,
-                          MessageTemplate::Template template_index,
+                          MessageTemplate template_index,
                           Handle<Object> arg0 = Handle<Object>(),
                           Handle<Object> arg1 = Handle<Object>(),
                           Handle<Object> arg2 = Handle<Object>());
 
-#define DECLARE_ERROR(NAME)                                          \
-  Handle<Object> New##NAME(MessageTemplate::Template template_index, \
-                           Handle<Object> arg0 = Handle<Object>(),   \
-                           Handle<Object> arg1 = Handle<Object>(),   \
+#define DECLARE_ERROR(NAME)                                        \
+  Handle<Object> New##NAME(MessageTemplate template_index,         \
+                           Handle<Object> arg0 = Handle<Object>(), \
+                           Handle<Object> arg1 = Handle<Object>(), \
                            Handle<Object> arg2 = Handle<Object>());
   DECLARE_ERROR(Error)
   DECLARE_ERROR(EvalError)
@@ -822,11 +819,13 @@ class V8_EXPORT_PRIVATE Factory {
 #undef DECLARE_ERROR
 
   Handle<String> NumberToString(Handle<Object> number, bool check_cache = true);
-  Handle<String> NumberToString(Smi* number, bool check_cache = true);
+  Handle<String> NumberToString(Smi number, bool check_cache = true);
 
   inline Handle<String> Uint32ToString(uint32_t value, bool check_cache = true);
 
-#define ROOT_ACCESSOR(type, name, CamelName) inline Handle<type> name();
+// TODO(jkummerow): Drop std::remove_pointer after the migration to ObjectPtr.
+#define ROOT_ACCESSOR(Type, name, CamelName) \
+  inline Handle<std::remove_pointer<Type>::type> name();
   ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
@@ -867,12 +866,9 @@ class V8_EXPORT_PRIVATE Factory {
   Handle<Map> CreateClassFunctionMap(Handle<JSFunction> empty_function);
 
   // Allocates a new JSMessageObject object.
-  Handle<JSMessageObject> NewJSMessageObject(MessageTemplate::Template message,
-                                             Handle<Object> argument,
-                                             int start_position,
-                                             int end_position,
-                                             Handle<Script> script,
-                                             Handle<Object> stack_frames);
+  Handle<JSMessageObject> NewJSMessageObject(
+      MessageTemplate message, Handle<Object> argument, int start_position,
+      int end_position, Handle<Script> script, Handle<Object> stack_frames);
 
   Handle<DebugInfo> NewDebugInfo(Handle<SharedFunctionInfo> shared);
 

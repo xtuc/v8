@@ -15,7 +15,6 @@ namespace internal {
 
 // Forward declarations.
 class Isolate;
-class BuiltinSerializer;
 class PartialSerializer;
 class StartupSerializer;
 
@@ -23,8 +22,7 @@ class StartupSerializer;
 class SnapshotData : public SerializedData {
  public:
   // Used when producing.
-  template <class AllocatorT>
-  explicit SnapshotData(const Serializer<AllocatorT>* serializer);
+  explicit SnapshotData(const Serializer* serializer);
 
   // Used when consuming.
   explicit SnapshotData(const Vector<const byte> snapshot)
@@ -52,33 +50,6 @@ class SnapshotData : public SerializedData {
   static const uint32_t kHeaderSize = kPayloadLengthOffset + kUInt32Size;
 };
 
-class BuiltinSnapshotData final : public SnapshotData {
- public:
-  // Used when producing.
-  // This simply forwards to the SnapshotData constructor.
-  // The BuiltinSerializer appends the builtin offset table to the payload.
-  explicit BuiltinSnapshotData(const BuiltinSerializer* serializer);
-
-  // Used when consuming.
-  explicit BuiltinSnapshotData(const Vector<const byte> snapshot)
-      : SnapshotData(snapshot) {
-  }
-
-  // Returns the serialized payload without the builtin offsets table.
-  Vector<const byte> Payload() const override;
-
-  // Returns only the builtin offsets table.
-  Vector<const uint32_t> BuiltinOffsets() const;
-
- private:
-  // In addition to the format specified in SnapshotData, BuiltinsSnapshotData
-  // includes a list of builtin at the end of the serialized payload:
-  //
-  // ...
-  // ... serialized payload
-  // ... list of builtins offsets
-};
-
 class EmbeddedData final {
  public:
   static EmbeddedData FromIsolate(Isolate* isolate);
@@ -96,7 +67,8 @@ class EmbeddedData final {
 
   // Padded with kCodeAlignment.
   uint32_t PaddedInstructionSizeOfBuiltin(int i) const {
-    return PadAndAlign(InstructionSizeOfBuiltin(i));
+    uint32_t size = InstructionSizeOfBuiltin(i);
+    return (size == 0) ? 0 : PadAndAlign(size);
   }
 
   size_t CreateHash() const;
@@ -167,14 +139,6 @@ class Snapshot : public AllStatic {
       size_t context_index,
       v8::DeserializeEmbedderFieldsCallback embedder_fields_deserializer);
 
-  // Deserializes a single given builtin code object. Intended to be called at
-  // runtime after the isolate (and the builtins table) has been fully
-  // initialized.
-  static Code* DeserializeBuiltin(Isolate* isolate, int builtin_id);
-  static void EnsureAllBuiltinsAreDeserialized(Isolate* isolate);
-  static Code* EnsureBuiltinIsDeserialized(Isolate* isolate,
-                                           Handle<SharedFunctionInfo> shared);
-
   // ---------------- Helper methods ----------------
 
   static bool HasContextSnapshot(Isolate* isolate, size_t index);
@@ -189,7 +153,7 @@ class Snapshot : public AllStatic {
 
   static v8::StartupData CreateSnapshotBlob(
       const SnapshotData* startup_snapshot,
-      const BuiltinSnapshotData* builtin_snapshot,
+      const SnapshotData* read_only_snapshot,
       const std::vector<SnapshotData*>& context_snapshots,
       bool can_be_rehashed);
 
@@ -203,7 +167,7 @@ class Snapshot : public AllStatic {
                                        uint32_t index);
   static bool ExtractRehashability(const v8::StartupData* data);
   static Vector<const byte> ExtractStartupData(const v8::StartupData* data);
-  static Vector<const byte> ExtractBuiltinData(const v8::StartupData* data);
+  static Vector<const byte> ExtractReadOnlyData(const v8::StartupData* data);
   static Vector<const byte> ExtractContextData(const v8::StartupData* data,
                                                uint32_t index);
 
@@ -223,13 +187,13 @@ class Snapshot : public AllStatic {
   // [2] checksum part A
   // [3] checksum part B
   // [4] (128 bytes) version string
-  // [5] offset to builtins
+  // [5] offset to readonly
   // [6] offset to context 0
   // [7] offset to context 1
   // ...
   // ... offset to context N - 1
   // ... startup snapshot data
-  // ... builtin snapshot data
+  // ... read-only snapshot data
   // ... context 0 snapshot data
   // ... context 1 snapshot data
 
@@ -244,10 +208,10 @@ class Snapshot : public AllStatic {
   static const uint32_t kVersionStringOffset =
       kChecksumPartBOffset + kUInt32Size;
   static const uint32_t kVersionStringLength = 64;
-  static const uint32_t kBuiltinOffsetOffset =
+  static const uint32_t kReadOnlyOffsetOffset =
       kVersionStringOffset + kVersionStringLength;
   static const uint32_t kFirstContextOffsetOffset =
-      kBuiltinOffsetOffset + kUInt32Size;
+      kReadOnlyOffsetOffset + kUInt32Size;
 
   static Vector<const byte> ChecksummedContent(const v8::StartupData* data) {
     const uint32_t kChecksumStart = kVersionStringOffset;

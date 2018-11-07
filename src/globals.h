@@ -96,8 +96,6 @@ class AllStatic {
 };
 
 typedef uint8_t byte;
-typedef uintptr_t Address;
-static const Address kNullAddress = 0;
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -374,6 +372,20 @@ inline std::ostream& operator<<(std::ostream& os, DeoptimizeKind kind) {
   UNREACHABLE();
 }
 
+enum class IsolateAllocationMode {
+  // Allocate Isolate in C++ heap using default new/delete operators.
+  kInCppHeap,
+
+  // Allocate Isolate in a committed region inside V8 heap reservation.
+  kInV8Heap,
+
+#ifdef V8_COMPRESS_POINTERS
+  kDefault = kInV8Heap,
+#else
+  kDefault = kInCppHeap,
+#endif
+};
+
 // Indicates whether the lookup is related to sloppy-mode block-scoped
 // function hoisting, and is a synthetic assignment for that.
 enum class LookupHoistingMode { kNormal, kLegacySloppy };
@@ -428,8 +440,21 @@ constexpr int kCodeAlignmentBits = 5;
 constexpr intptr_t kCodeAlignment = 1 << kCodeAlignmentBits;
 constexpr intptr_t kCodeAlignmentMask = kCodeAlignment - 1;
 
-const intptr_t kWeakHeapObjectMask = 1 << 1;
-const intptr_t kClearedWeakHeapObject = 3;
+const Address kWeakHeapObjectMask = 1 << 1;
+
+// The lower 32 bits of the cleared weak reference value is always equal to
+// the |kClearedWeakHeapObjectLower32| constant but on 64-bit architectures
+// the value of the upper 32 bits part may be
+// 1) zero when pointer compression is disabled,
+// 2) upper 32 bits of the isolate root value when pointer compression is
+//    enabled.
+// This is necessary to make pointer decompression computation also suitable
+// for cleared weak reference.
+// Note, that real heap objects can't have lower 32 bits equal to 3 because
+// this offset belongs to page header. So, in either case it's enough to
+// compare only the lower 32 bits of a MaybeObject value in order to figure
+// out if it's a cleared reference or not.
+const uint32_t kClearedWeakHeapObjectLower32 = 3;
 
 // Zap-value: The value used for zapping dead objects.
 // Should be a recognizable hex value tagged as a failure.
@@ -478,21 +503,19 @@ class Code;
 class CodeSpace;
 class CodeStub;
 class Context;
+class DeclarationScope;
 class Debug;
 class DebugInfo;
 class Descriptor;
 class DescriptorArray;
 class TransitionArray;
 class ExternalReference;
+class FeedbackVector;
 class FixedArray;
+class Foreign;
 class FreeStoreAllocationPolicy;
 class FunctionTemplateInfo;
-class MemoryChunk;
-class NumberDictionary;
-class SimpleNumberDictionary;
-class NameDictionary;
 class GlobalDictionary;
-template <typename T> class MaybeHandle;
 template <typename T> class Handle;
 class Heap;
 class HeapObject;
@@ -509,34 +532,38 @@ class MacroAssembler;
 class Map;
 class MapSpace;
 class MarkCompactCollector;
+template <typename T>
+class MaybeHandle;
 class MaybeObject;
+class MemoryChunk;
+class MessageLocation;
+class ModuleScope;
+class Name;
+class NameDictionary;
 class NewSpace;
 class NewLargeObjectSpace;
+class NumberDictionary;
 class Object;
+class ObjectSlot;
 class OldSpace;
 class ParameterCount;
 class ReadOnlySpace;
-class Foreign;
+class RelocInfo;
 class Scope;
-class DeclarationScope;
-class ModuleScope;
 class ScopeInfo;
 class Script;
+class SimpleNumberDictionary;
 class Smi;
 template <typename Config, class Allocator = FreeStoreAllocationPolicy>
 class SplayTree;
 class String;
-class Symbol;
-class Name;
 class Struct;
-class FeedbackVector;
+class Symbol;
 class Variable;
-class RelocInfo;
-class MessageLocation;
 
-typedef bool (*WeakSlotCallback)(Object** pointer);
+typedef bool (*WeakSlotCallback)(ObjectSlot pointer);
 
-typedef bool (*WeakSlotCallbackWithHeap)(Heap* heap, Object** pointer);
+typedef bool (*WeakSlotCallbackWithHeap)(Heap* heap, ObjectSlot pointer);
 
 // -----------------------------------------------------------------------------
 // Miscellaneous
@@ -623,13 +650,11 @@ enum Movability { kMovable, kImmovable };
 
 enum VisitMode {
   VISIT_ALL,
-  VISIT_ALL_BUT_READ_ONLY,
   VISIT_ALL_IN_MINOR_MC_MARK,
   VISIT_ALL_IN_MINOR_MC_UPDATE,
   VISIT_ALL_IN_SCAVENGE,
   VISIT_ALL_IN_SWEEP_NEWSPACE,
   VISIT_ONLY_STRONG,
-  VISIT_ONLY_STRONG_FOR_SERIALIZATION,
   VISIT_FOR_SERIALIZATION,
 };
 
@@ -784,10 +809,10 @@ constexpr int kIeeeDoubleExponentWordOffset = 0;
 // Testers for test.
 
 #define HAS_SMI_TAG(value) \
-  ((reinterpret_cast<intptr_t>(value) & ::i::kSmiTagMask) == ::i::kSmiTag)
+  ((static_cast<intptr_t>(value) & ::i::kSmiTagMask) == ::i::kSmiTag)
 
-#define HAS_HEAP_OBJECT_TAG(value)                                   \
-  (((reinterpret_cast<intptr_t>(value) & ::i::kHeapObjectTagMask) == \
+#define HAS_HEAP_OBJECT_TAG(value)                              \
+  (((static_cast<intptr_t>(value) & ::i::kHeapObjectTagMask) == \
     ::i::kHeapObjectTag))
 
 // OBJECT_POINTER_ALIGN returns the value aligned as a HeapObject pointer
@@ -1018,7 +1043,6 @@ inline const char* VariableMode2String(VariableMode mode) {
 
 enum VariableKind : uint8_t {
   NORMAL_VARIABLE,
-  FUNCTION_VARIABLE,
   THIS_VARIABLE,
   SLOPPY_FUNCTION_NAME_VARIABLE
 };
@@ -1110,7 +1134,7 @@ enum FunctionKind : uint8_t {
   kSetterFunction,
   kAsyncFunction,
   kModule,
-  kClassFieldsInitializerFunction,
+  kClassMembersInitializerFunction,
 
   kDefaultBaseConstructor,
   kDefaultDerivedConstructor,
@@ -1159,7 +1183,7 @@ inline bool IsConciseMethod(FunctionKind kind) {
          kind == FunctionKind::kConciseGeneratorMethod ||
          kind == FunctionKind::kAsyncConciseMethod ||
          kind == FunctionKind::kAsyncConciseGeneratorMethod ||
-         kind == FunctionKind::kClassFieldsInitializerFunction;
+         kind == FunctionKind::kClassMembersInitializerFunction;
 }
 
 inline bool IsGetterFunction(FunctionKind kind) {
@@ -1195,8 +1219,8 @@ inline bool IsClassConstructor(FunctionKind kind) {
   return IsBaseConstructor(kind) || IsDerivedConstructor(kind);
 }
 
-inline bool IsClassFieldsInitializerFunction(FunctionKind kind) {
-  return kind == FunctionKind::kClassFieldsInitializerFunction;
+inline bool IsClassMembersInitializerFunction(FunctionKind kind) {
+  return kind == FunctionKind::kClassMembersInitializerFunction;
 }
 
 inline bool IsConstructable(FunctionKind kind) {
@@ -1230,8 +1254,8 @@ inline std::ostream& operator<<(std::ostream& os, FunctionKind kind) {
       return os << "AsyncFunction";
     case FunctionKind::kModule:
       return os << "Module";
-    case FunctionKind::kClassFieldsInitializerFunction:
-      return os << "ClassFieldsInitializerFunction";
+    case FunctionKind::kClassMembersInitializerFunction:
+      return os << "ClassMembersInitializerFunction";
     case FunctionKind::kDefaultBaseConstructor:
       return os << "DefaultBaseConstructor";
     case FunctionKind::kDefaultDerivedConstructor:
@@ -1311,27 +1335,28 @@ class BinaryOperationFeedback {
 // at different points by performing an 'OR' operation. Type feedback moves
 // to a more generic type when we combine feedback.
 //
-//   kSignedSmall -> kNumber             -> kNumberOrOddball -> kAny
-//                   kInternalizedString -> kString          -> kAny
-//                                          kSymbol          -> kAny
-//                                          kBigInt          -> kAny
-//                                          kReceiver        -> kAny
+//   kSignedSmall -> kNumber             -> kNumberOrOddball           -> kAny
+//                   kReceiver           -> kReceiverOrNullOrUndefined -> kAny
+//                   kInternalizedString -> kString                    -> kAny
+//                                          kSymbol                    -> kAny
+//                                          kBigInt                    -> kAny
 //
 // This is distinct from BinaryOperationFeedback on purpose, because the
 // feedback that matters differs greatly as well as the way it is consumed.
 class CompareOperationFeedback {
  public:
   enum {
-    kNone = 0x00,
-    kSignedSmall = 0x01,
-    kNumber = 0x3,
-    kNumberOrOddball = 0x7,
-    kInternalizedString = 0x8,
-    kString = 0x18,
-    kSymbol = 0x20,
-    kBigInt = 0x30,
-    kReceiver = 0x40,
-    kAny = 0xff
+    kNone = 0x000,
+    kSignedSmall = 0x001,
+    kNumber = 0x003,
+    kNumberOrOddball = 0x007,
+    kInternalizedString = 0x008,
+    kString = 0x018,
+    kSymbol = 0x020,
+    kBigInt = 0x040,
+    kReceiver = 0x080,
+    kReceiverOrNullOrUndefined = 0x180,
+    kAny = 0x1ff
   };
 };
 
@@ -1534,8 +1559,9 @@ enum IsolateAddressId {
       kIsolateAddressCount
 };
 
-V8_INLINE static bool HasWeakHeapObjectTag(const internal::MaybeObject* value) {
-  return ((reinterpret_cast<intptr_t>(value) & kHeapObjectTagMask) ==
+V8_INLINE static bool HasWeakHeapObjectTag(Address value) {
+  // TODO(jkummerow): Consolidate integer types here.
+  return ((static_cast<intptr_t>(value) & kHeapObjectTagMask) ==
           kWeakHeapObjectTag);
 }
 
@@ -1544,26 +1570,6 @@ V8_INLINE static bool HasWeakHeapObjectTag(const internal::MaybeObject* value) {
 V8_INLINE static bool HasWeakHeapObjectTag(const Object* value) {
   return ((reinterpret_cast<intptr_t>(value) & kHeapObjectTagMask) ==
           kWeakHeapObjectTag);
-}
-
-V8_INLINE static bool IsClearedWeakHeapObject(const MaybeObject* value) {
-  return reinterpret_cast<intptr_t>(value) == kClearedWeakHeapObject;
-}
-
-V8_INLINE static HeapObject* RemoveWeakHeapObjectMask(
-    HeapObjectReference* value) {
-  return reinterpret_cast<HeapObject*>(reinterpret_cast<intptr_t>(value) &
-                                       ~kWeakHeapObjectMask);
-}
-
-V8_INLINE static HeapObjectReference* AddWeakHeapObjectMask(Object* value) {
-  return reinterpret_cast<HeapObjectReference*>(
-      reinterpret_cast<intptr_t>(value) | kWeakHeapObjectMask);
-}
-
-V8_INLINE static MaybeObject* AddWeakHeapObjectMask(MaybeObject* value) {
-  return reinterpret_cast<MaybeObject*>(reinterpret_cast<intptr_t>(value) |
-                                        kWeakHeapObjectMask);
 }
 
 enum class HeapObjectReferenceType {

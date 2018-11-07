@@ -5225,6 +5225,22 @@ THREADED_TEST(Array) {
   CHECK_EQ(27u, array->Length());
   array = v8::Array::New(context->GetIsolate(), -27);
   CHECK_EQ(0u, array->Length());
+
+  std::vector<Local<Value>> vector = {v8_num(1), v8_num(2), v8_num(3)};
+  array = v8::Array::New(context->GetIsolate(), vector.data(), vector.size());
+  CHECK_EQ(vector.size(), array->Length());
+  CHECK_EQ(1, arr->Get(context.local(), 0)
+                  .ToLocalChecked()
+                  ->Int32Value(context.local())
+                  .FromJust());
+  CHECK_EQ(2, arr->Get(context.local(), 1)
+                  .ToLocalChecked()
+                  ->Int32Value(context.local())
+                  .FromJust());
+  CHECK_EQ(3, arr->Get(context.local(), 2)
+                  .ToLocalChecked()
+                  ->Int32Value(context.local())
+                  .FromJust());
 }
 
 
@@ -7253,7 +7269,63 @@ THREADED_TEST(ExtensibleOnUndetectable) {
   ExpectBoolean("undetectable.y == undefined", true);
 }
 
+THREADED_TEST(ConstructCallWithUndetectable) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
 
+  Local<v8::FunctionTemplate> desc = v8::FunctionTemplate::New(isolate);
+  desc->InstanceTemplate()->MarkAsUndetectable();  // undetectable
+  desc->InstanceTemplate()->SetCallAsFunctionHandler(ReturnThis);  // callable
+
+  Local<v8::Object> obj = desc->GetFunction(env.local())
+                              .ToLocalChecked()
+                              ->NewInstance(env.local())
+                              .ToLocalChecked();
+  CHECK(
+      env->Global()->Set(env.local(), v8_str("undetectable"), obj).FromJust());
+
+  // Undetectable object cannot be called as constructor.
+  v8::TryCatch try_catch(env->GetIsolate());
+  CHECK(CompileRun("new undetectable()").IsEmpty());
+  CHECK(try_catch.HasCaught());
+  String::Utf8Value exception_value(env->GetIsolate(), try_catch.Exception());
+  CHECK_EQ(0, strcmp("TypeError: undetectable is not a constructor",
+                     *exception_value));
+}
+
+static int increment_callback_counter = 0;
+
+static void IncrementCounterConstructCallback(
+    const v8::FunctionCallbackInfo<v8::Value>& args) {
+  increment_callback_counter++;
+  CHECK(Local<Object>::Cast(args.NewTarget())
+            ->Set(args.GetIsolate()->GetCurrentContext(), v8_str("counter"),
+                  v8_num(increment_callback_counter))
+            .FromJust());
+  args.GetReturnValue().Set(args.NewTarget());
+}
+
+THREADED_TEST(SetCallAsFunctionHandlerConstructor) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+
+  Local<v8::FunctionTemplate> desc = v8::FunctionTemplate::New(isolate);
+  desc->InstanceTemplate()->SetCallAsFunctionHandler(
+      IncrementCounterConstructCallback);  // callable
+
+  Local<v8::Object> obj = desc->GetFunction(env.local())
+                              .ToLocalChecked()
+                              ->NewInstance(env.local())
+                              .ToLocalChecked();
+  CHECK(env->Global()->Set(env.local(), v8_str("Counter"), obj).FromJust());
+
+  ExpectInt32("(new Counter()).counter", 1);
+  CHECK_EQ(1, increment_callback_counter);
+  ExpectInt32("(new Counter()).counter", 2);
+  CHECK_EQ(2, increment_callback_counter);
+}
 // The point of this test is type checking. We run it only so compilers
 // don't complain about an unused function.
 TEST(PersistentHandles) {
@@ -7672,15 +7744,13 @@ static int lookup_count = 0;
 v8::Local<v8::FunctionTemplate> FunctionExtension::GetNativeFunctionTemplate(
     v8::Isolate* isolate, v8::Local<String> name) {
   lookup_count++;
-  if (name->Equals(isolate->GetCurrentContext(), v8_str("A")).FromJust()) {
+  if (name->StrictEquals(v8_str("A"))) {
     return v8::FunctionTemplate::New(isolate, CallFun,
                                      v8::Integer::New(isolate, 8));
-  } else if (name->Equals(isolate->GetCurrentContext(), v8_str("B"))
-                 .FromJust()) {
+  } else if (name->StrictEquals(v8_str("B"))) {
     return v8::FunctionTemplate::New(isolate, CallFun,
                                      v8::Integer::New(isolate, 7));
-  } else if (name->Equals(isolate->GetCurrentContext(), v8_str("C"))
-                 .FromJust()) {
+  } else if (name->StrictEquals(v8_str("C"))) {
     return v8::FunctionTemplate::New(isolate, CallFun,
                                      v8::Integer::New(isolate, 6));
   } else {
@@ -8943,13 +9013,13 @@ THREADED_TEST(ToArrayIndex) {
 
 static v8::MaybeLocal<Value> PrepareStackTrace42(v8::Local<Context> context,
                                                  v8::Local<Value> error,
-                                                 v8::Local<StackTrace> trace) {
+                                                 v8::Local<Array> trace) {
   return v8::Number::New(context->GetIsolate(), 42);
 }
 
-static v8::MaybeLocal<Value> PrepareStackTraceThrow(
-    v8::Local<Context> context, v8::Local<Value> error,
-    v8::Local<StackTrace> trace) {
+static v8::MaybeLocal<Value> PrepareStackTraceThrow(v8::Local<Context> context,
+                                                    v8::Local<Value> error,
+                                                    v8::Local<Array> trace) {
   v8::Isolate* isolate = context->GetIsolate();
   v8::Local<String> message = v8_str("42");
   isolate->ThrowException(v8::Exception::Error(message));
@@ -11790,15 +11860,10 @@ THREADED_TEST(CallAsFunction) {
     CHECK(!try_catch.HasCaught());
     CHECK_EQ(17, value->Int32Value(context.local()).FromJust());
 
-    // Check that the call-as-function handler cannot be called through
-    // new.
+    // Check that the call-as-function handler can be called through new.
     value = CompileRun("new obj(43)");
-    CHECK(value.IsEmpty());
-    CHECK(try_catch.HasCaught());
-    String::Utf8Value exception_value(isolate, try_catch.Exception());
-    CHECK_EQ(0,
-             strcmp("TypeError: obj is not a constructor", *exception_value));
-    try_catch.Reset();
+    CHECK(!try_catch.HasCaught());
+    CHECK_EQ(-43, value->Int32Value(context.local()).FromJust());
 
     // Check that the call-as-function handler can be called through
     // the API.
@@ -19271,6 +19336,8 @@ TEST(GetHeapSpaceStatistics) {
     CHECK_GT(space_statistics.physical_space_size(), 0u);
     total_physical_size += space_statistics.physical_space_size();
   }
+  total_available_size += CcTest::heap()->memory_allocator()->Available();
+
   CHECK_EQ(total_size, heap_statistics.total_heap_size());
   CHECK_EQ(total_used_size, heap_statistics.used_heap_size());
   CHECK_EQ(total_available_size, heap_statistics.total_available_size());
@@ -22902,6 +22969,8 @@ TEST(ScopedMicrotasks) {
   env->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
 }
 
+#ifndef V8_LITE_MODE
+
 namespace {
 
 int probes_counter = 0;
@@ -22973,7 +23042,9 @@ void TestStubCache(bool primary) {
   } else {
     i::FLAG_test_secondary_stub_cache = true;
   }
+#ifndef V8_LITE_MODE
   i::FLAG_opt = false;
+#endif  // V8_LITE_MODE
 
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
@@ -23025,6 +23096,7 @@ UNINITIALIZED_TEST(SecondaryStubCache) {
 }
 
 #endif  // ENABLE_DISASSEMBLER
+#endif  // V8_LITE_MODE
 
 namespace {
 
@@ -23912,8 +23984,11 @@ TEST(AccessCheckThrows) {
 }
 
 TEST(AccessCheckInIC) {
+#ifndef V8_LITE_MODE
   i::FLAG_native_code_counters = true;
+#ifndef V8_LITE_MODE
   i::FLAG_opt = false;
+#endif  // V8_LITE_MODE
 
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
@@ -24013,6 +24088,7 @@ TEST(AccessCheckInIC) {
     CHECK_EQ(13, updates_counter - initial_updates);
   }
   isolate->Dispose();
+#endif  // V8_LITE_MODE
 }
 
 class RequestInterruptTestBase {
@@ -25245,7 +25321,6 @@ TEST(DisallowJavascriptExecutionScope) {
   CompileRun("2+2");
 }
 
-
 TEST(AllowJavascriptExecutionScope) {
   LocalContext context;
   v8::Isolate* isolate = context->GetIsolate();
@@ -25259,7 +25334,6 @@ TEST(AllowJavascriptExecutionScope) {
   }
 }
 
-
 TEST(ThrowOnJavascriptExecution) {
   LocalContext context;
   v8::Isolate* isolate = context->GetIsolate();
@@ -25271,6 +25345,40 @@ TEST(ThrowOnJavascriptExecution) {
   CHECK(try_catch.HasCaught());
 }
 
+namespace {
+
+class MockPlatform : public TestPlatform {
+ public:
+  MockPlatform() {
+    // Now that it's completely constructed, make this the current platform.
+    i::V8::SetPlatformForTesting(this);
+  }
+  ~MockPlatform() override = default;
+
+  bool dump_without_crashing_called() const {
+    return dump_without_crashing_called_;
+  }
+
+  void DumpWithoutCrashing() override { dump_without_crashing_called_ = true; }
+
+ private:
+  bool dump_without_crashing_called_ = false;
+};
+
+}  // namespace
+
+TEST(DumpOnJavascriptExecution) {
+  MockPlatform platform;
+
+  LocalContext context;
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::HandleScope scope(isolate);
+  v8::Isolate::DisallowJavascriptExecutionScope throw_js(
+      isolate, v8::Isolate::DisallowJavascriptExecutionScope::DUMP_ON_FAILURE);
+  CHECK(!platform.dump_without_crashing_called());
+  CompileRun("1+1");
+  CHECK(platform.dump_without_crashing_called());
+}
 
 TEST(Regress354123) {
   LocalContext current;
@@ -26516,6 +26624,7 @@ TEST(StringConcatOverflow) {
 }
 
 TEST(TurboAsmDisablesNeuter) {
+#ifndef V8_LITE_MODE
   i::FLAG_opt = true;
   i::FLAG_allow_natives_syntax = true;
   v8::V8::Initialize();
@@ -26552,6 +26661,7 @@ TEST(TurboAsmDisablesNeuter) {
 
   result = CompileRun(store).As<v8::ArrayBuffer>();
   CHECK(!result->IsNeuterable());
+#endif  // V8_LITE_MODE
 }
 
 
@@ -28337,8 +28447,7 @@ bool wasm_streaming_data_got_collected = false;
 void WasmStreamingTestFinalizer(const v8::WeakCallbackInfo<void>& data) {
   CHECK(!wasm_streaming_data_got_collected);
   wasm_streaming_data_got_collected = true;
-  i::JSObject** p = reinterpret_cast<i::JSObject**>(data.GetParameter());
-  i::GlobalHandles::Destroy(reinterpret_cast<i::Object**>(p));
+  i::GlobalHandles::Destroy(reinterpret_cast<i::Address*>(data.GetParameter()));
 }
 
 void WasmStreamingCallbackTestCallbackIsCalled(
@@ -28835,4 +28944,35 @@ TEST(TestGetEmbeddedCodeRange) {
     CHECK_EQ(nullptr, builtins_range.start);
     CHECK_EQ(0, builtins_range.length_in_bytes);
   }
+}
+
+TEST(MicrotaskContextShouldBeNativeContext) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+
+  auto callback = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
+    v8::Isolate* isolate = info.GetIsolate();
+    v8::HandleScope scope(isolate);
+    i::Handle<i::Context> context =
+        v8::Utils::OpenHandle(*isolate->GetEnteredOrMicrotaskContext());
+
+    CHECK(context->IsNativeContext());
+    info.GetReturnValue().SetUndefined();
+  };
+
+  Local<v8::FunctionTemplate> desc = v8::FunctionTemplate::New(isolate);
+  desc->InstanceTemplate()->SetCallAsFunctionHandler(callback);
+  Local<v8::Object> obj = desc->GetFunction(env.local())
+                              .ToLocalChecked()
+                              ->NewInstance(env.local())
+                              .ToLocalChecked();
+
+  CHECK(env->Global()->Set(env.local(), v8_str("callback"), obj).FromJust());
+  CompileRun(
+      "with({}){(async ()=>{"
+      "  await 42;"
+      "})().then(callback);}");
+
+  isolate->RunMicrotasks();
 }

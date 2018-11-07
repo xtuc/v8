@@ -8,6 +8,7 @@
 #include "src/arm/assembler-arm.h"
 #include "src/assembler.h"
 #include "src/bailout-reason.h"
+#include "src/contexts.h"
 #include "src/globals.h"
 #include "src/turbo-assembler.h"
 
@@ -38,7 +39,7 @@ constexpr Register kRuntimeCallFunctionRegister = r1;
 constexpr Register kRuntimeCallArgCountRegister = r0;
 constexpr Register kRuntimeCallArgvRegister = r2;
 constexpr Register kWasmInstanceRegister = r3;
-constexpr Register kWasmLazyCompileFuncIndexRegister = r4;
+constexpr Register kWasmCompileLazyFuncIndexRegister = r4;
 
 // ----------------------------------------------------------------------------
 // Static helper functions
@@ -102,7 +103,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Push(Register src) { push(src); }
 
   void Push(Handle<HeapObject> handle);
-  void Push(Smi* smi);
+  void Push(Smi smi);
 
   // Push two registers.  Pushes leftmost register first (to highest address).
   void Push(Register src1, Register src2, Condition cond = al) {
@@ -380,6 +381,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void CallRecordWriteStub(Register object, Register address,
                            RememberedSetAction remembered_set_action,
                            SaveFPRegsMode fp_mode);
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Address wasm_target);
 
   // Does a runtime check for 16/32 FP registers. Either way, pushes 32 double
   // values to location, saving [d0..(d15|d31)].
@@ -445,7 +449,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
                    SwVfpRegister src_lane, int lane);
 
   // Register move. May do nothing if the registers are identical.
-  void Move(Register dst, Smi* smi);
+  void Move(Register dst, Smi smi);
   void Move(Register dst, Handle<HeapObject> value);
   void Move(Register dst, ExternalReference reference);
   void Move(Register dst, Register src, Condition cond = al);
@@ -564,6 +568,11 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 
   void CallCFunctionHelper(Register function, int num_reg_arguments,
                            int num_double_arguments);
+
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Handle<Code> code_target,
+                           Address wasm_target);
 };
 
 // MacroAssembler implements a collection of frequently used macros.
@@ -656,9 +665,7 @@ class MacroAssembler : public TurboAssembler {
                       bool argument_count_is_length = false);
 
   // Load the global proxy from the current context.
-  void LoadGlobalProxy(Register dst) {
-    LoadNativeContextSlot(Context::GLOBAL_PROXY_INDEX, dst);
-  }
+  void LoadGlobalProxy(Register dst);
 
   void LoadNativeContextSlot(int index, Register dst);
 

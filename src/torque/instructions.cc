@@ -25,8 +25,12 @@ void PeekInstruction::TypeInstruction(Stack<const Type*>* stack,
                                       ControlFlowGraph* cfg) const {
   const Type* type = stack->Peek(slot);
   if (widened_type) {
+    if (type->IsTopType()) {
+      const TopType* top_type = TopType::cast(type);
+      ReportError("use of " + top_type->reason());
+    }
     if (!type->IsSubtypeOf(*widened_type)) {
-      ReportError("type ", type, " is not a subtype of ", *widened_type);
+      ReportError("type ", *type, " is not a subtype of ", **widened_type);
     }
     type = *widened_type;
   }
@@ -66,6 +70,21 @@ void ModuleConstantInstruction::TypeInstruction(Stack<const Type*>* stack,
   stack->PushMany(LowerType(constant->type()));
 }
 
+void InstructionBase::InvalidateTransientTypes(
+    Stack<const Type*>* stack) const {
+  auto current = stack->begin();
+  while (current != stack->end()) {
+    if ((*current)->IsTransient()) {
+      std::stringstream stream;
+      stream << "type " << **current
+             << " is made invalid by transitioning callable invocation at "
+             << PositionAsString(pos);
+      *current = TypeOracle::GetTopType(stream.str(), *current);
+    }
+    ++current;
+  }
+}
+
 void CallCsaMacroInstruction::TypeInstruction(Stack<const Type*>* stack,
                                               ControlFlowGraph* cfg) const {
   std::vector<const Type*> parameter_types =
@@ -80,6 +99,16 @@ void CallCsaMacroInstruction::TypeInstruction(Stack<const Type*>* stack,
     }
   }
   if (!parameter_types.empty()) ReportError("missing arguments");
+
+  if (macro->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetObjectType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
 
   stack->PushMany(LowerType(macro->signature().return_type));
 }
@@ -109,6 +138,16 @@ void CallCsaMacroAndBranchInstruction::TypeInstruction(
     label_blocks[i]->SetInputTypes(std::move(continuation_stack));
   }
 
+  if (macro->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetObjectType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
+
   if (macro->signature().return_type != TypeOracle::GetNeverType()) {
     Stack<const Type*> return_stack = *stack;
     return_stack.PushMany(LowerType(macro->signature().return_type));
@@ -130,6 +169,16 @@ void CallBuiltinInstruction::TypeInstruction(Stack<const Type*>* stack,
       LowerParameterTypes(builtin->signature().parameter_types)) {
     ReportError("wrong argument types");
   }
+  if (builtin->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetObjectType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
+
   stack->PushMany(LowerType(builtin->signature().return_type));
 }
 
@@ -141,6 +190,9 @@ void CallBuiltinPointerInstruction::TypeInstruction(
   if (argument_types != LowerParameterTypes(f->parameter_types())) {
     ReportError("wrong argument types");
   }
+  // TODO(tebbi): Only invalidate transient types if the function pointer type
+  // is transitioning.
+  InvalidateTransientTypes(stack);
   stack->PushMany(LowerType(f->return_type()));
 }
 
@@ -152,7 +204,20 @@ void CallRuntimeInstruction::TypeInstruction(Stack<const Type*>* stack,
                           argc)) {
     ReportError("wrong argument types");
   }
-  stack->PushMany(LowerType(runtime_function->signature().return_type));
+  if (runtime_function->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetObjectType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
+
+  const Type* return_type = runtime_function->signature().return_type;
+  if (return_type != TypeOracle::GetNeverType()) {
+    stack->PushMany(LowerType(return_type));
+  }
 }
 
 void BranchInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -191,12 +256,17 @@ void ReturnInstruction::TypeInstruction(Stack<const Type*>* stack,
 void PrintConstantStringInstruction::TypeInstruction(
     Stack<const Type*>* stack, ControlFlowGraph* cfg) const {}
 
-void DebugBreakInstruction::TypeInstruction(Stack<const Type*>* stack,
-                                            ControlFlowGraph* cfg) const {}
+void AbortInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                       ControlFlowGraph* cfg) const {}
 
 void UnsafeCastInstruction::TypeInstruction(Stack<const Type*>* stack,
                                             ControlFlowGraph* cfg) const {
   stack->Poke(stack->AboveTop() - 1, destination_type);
+}
+
+bool CallRuntimeInstruction::IsBlockTerminator() const {
+  return is_tailcall || runtime_function->signature().return_type ==
+                            TypeOracle::GetNeverType();
 }
 
 }  // namespace torque

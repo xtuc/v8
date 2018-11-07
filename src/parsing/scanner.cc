@@ -14,14 +14,14 @@
 #include "src/conversions-inl.h"
 #include "src/objects/bigint.h"
 #include "src/parsing/scanner-inl.h"
+#include "src/zone/zone.h"
 
 namespace v8 {
 namespace internal {
 
 class Scanner::ErrorState {
  public:
-  ErrorState(MessageTemplate::Template* message_stack,
-             Scanner::Location* location_stack)
+  ErrorState(MessageTemplate* message_stack, Scanner::Location* location_stack)
       : message_stack_(message_stack),
         old_message_(*message_stack),
         location_stack_(location_stack),
@@ -48,8 +48,8 @@ class Scanner::ErrorState {
   }
 
  private:
-  MessageTemplate::Template* const message_stack_;
-  MessageTemplate::Template const old_message_;
+  MessageTemplate* const message_stack_;
+  MessageTemplate const old_message_;
   Scanner::Location* const location_stack_;
   Scanner::Location const old_location_;
 };
@@ -147,12 +147,17 @@ void Scanner::BookmarkScope::Set() {
 
 void Scanner::BookmarkScope::Apply() {
   DCHECK(HasBeenSet());  // Caller hasn't called SetBookmark.
-  if (bookmark_ == kBookmarkAtFirstPos) {
-    scanner_->SeekNext(0);
+  if (had_parser_error_) {
+    scanner_->set_parser_error();
   } else {
-    scanner_->SeekNext(bookmark_);
-    scanner_->Next();
-    DCHECK_EQ(scanner_->location().beg_pos, static_cast<int>(bookmark_));
+    scanner_->reset_parser_error_flag();
+    if (bookmark_ == kBookmarkAtFirstPos) {
+      scanner_->SeekNext(0);
+    } else {
+      scanner_->SeekNext(bookmark_);
+      scanner_->Next();
+      DCHECK_EQ(scanner_->location().beg_pos, static_cast<int>(bookmark_));
+    }
   }
   bookmark_ = kBookmarkWasApplied;
 }
@@ -403,6 +408,7 @@ void Scanner::SanityCheckTokenDesc(const TokenDesc& token) const {
 
   switch (token.token) {
     case Token::UNINITIALIZED:
+    case Token::ILLEGAL:
       // token.literal_chars & other members might be garbage. That's ok.
       break;
     case Token::TEMPLATE_SPAN:

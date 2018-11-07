@@ -63,10 +63,11 @@ static unsigned CpuFeaturesImpliedByCompiler() {
 }
 
 static bool supportsCPUFeature(const char* feature) {
-  static std::set<std::string> features;
-  static std::set<std::string> all_available_features = {
-      "iesan3", "zarch",  "stfle",    "msa", "ldisp", "eimm",
-      "dfp",    "etf3eh", "highgprs", "te",  "vx"};
+  static std::set<std::string>& features = *new std::set<std::string>();
+  static std::set<std::string>& all_available_features =
+      *new std::set<std::string>({"iesan3", "zarch", "stfle", "msa", "ldisp",
+                                  "eimm", "dfp", "etf3eh", "highgprs", "te",
+                                  "vx"});
   if (features.empty()) {
 #if V8_HOST_ARCH_S390
 
@@ -277,18 +278,6 @@ bool RelocInfo::IsInConstantPool() { return false; }
 int RelocInfo::GetDeoptimizationId(Isolate* isolate, DeoptimizeKind kind) {
   DCHECK(IsRuntimeEntry(rmode_));
   return Deoptimizer::GetDeoptimizationId(isolate, target_address(), kind);
-}
-
-void RelocInfo::set_js_to_wasm_address(Address address,
-                                       ICacheFlushMode icache_flush_mode) {
-  DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
-  Assembler::set_target_address_at(pc_, constant_pool_, address,
-                                   icache_flush_mode);
-}
-
-Address RelocInfo::js_to_wasm_address() const {
-  DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
-  return Assembler::target_address_at(pc_, constant_pool_);
 }
 
 uint32_t RelocInfo::wasm_call_tag() const {

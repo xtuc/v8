@@ -14,6 +14,7 @@
 #include "src/ic/stub-cache.h"
 #include "src/objects-inl.h"
 #include "src/objects/module.h"
+#include "src/objects/smi.h"
 
 namespace v8 {
 namespace internal {
@@ -999,11 +1000,15 @@ void AccessorAssembler::HandleStoreICTransitionMapHandlerCase(
     // 1) name is a non-private symbol and attributes equal to NONE,
     // 2) name is a private symbol and attributes equal to DONT_ENUM.
     Label attributes_ok(this);
-    const int kAttributesDontDeleteReadOnlyMask =
+    const int kKindAndAttributesDontDeleteReadOnlyMask =
+        PropertyDetails::KindField::kMask |
         PropertyDetails::kAttributesDontDeleteMask |
         PropertyDetails::kAttributesReadOnlyMask;
-    // Both DontDelete and ReadOnly attributes must not be set.
-    GotoIf(IsSetWord32(details, kAttributesDontDeleteReadOnlyMask), miss);
+    STATIC_ASSERT(kData == 0);
+    // Both DontDelete and ReadOnly attributes must not be set and it has to be
+    // a kData property.
+    GotoIf(IsSetWord32(details, kKindAndAttributesDontDeleteReadOnlyMask),
+           miss);
 
     // DontEnum attribute is allowed only for private symbols and vice versa.
     Branch(Word32Equal(
@@ -1058,10 +1063,10 @@ void AccessorAssembler::CheckFieldType(TNode<DescriptorArray> descriptors,
     GotoIf(TaggedIsSmi(value), bailout);
     TNode<MaybeObject> field_type = LoadFieldTypeByKeyIndex(
         descriptors, UncheckedCast<IntPtrT>(name_index));
-    intptr_t kNoneType = reinterpret_cast<intptr_t>(FieldType::None());
-    intptr_t kAnyType = reinterpret_cast<intptr_t>(FieldType::Any());
-    DCHECK_NE(kNoneType, kClearedWeakHeapObject);
-    DCHECK_NE(kAnyType, kClearedWeakHeapObject);
+    const Address kNoneType = FieldType::None().ptr();
+    const Address kAnyType = FieldType::Any().ptr();
+    DCHECK_NE(static_cast<uint32_t>(kNoneType), kClearedWeakHeapObjectLower32);
+    DCHECK_NE(static_cast<uint32_t>(kAnyType), kClearedWeakHeapObjectLower32);
     // FieldType::None can't hold any value.
     GotoIf(WordEqual(BitcastMaybeObjectToWord(field_type),
                      IntPtrConstant(kNoneType)),
@@ -1679,7 +1684,8 @@ Node* AccessorAssembler::ExtendPropertiesBackingStore(Node* object,
     // |new_properties| is guaranteed to be in new space, so we can skip
     // the write barrier.
     CopyPropertyArrayValues(var_properties.value(), new_properties,
-                            var_length.value(), SKIP_WRITE_BARRIER, mode);
+                            var_length.value(), SKIP_WRITE_BARRIER, mode,
+                            DestroySource::kYes);
 
     // TODO(gsathya): Clean up the type conversions by creating smarter
     // helpers that do the correct op based on the mode.
@@ -2331,7 +2337,7 @@ void AccessorAssembler::TryProbeStubCacheTable(
   DCHECK_EQ(kPointerSize, stub_cache->value_reference(table).address() -
                               stub_cache->key_reference(table).address());
   TNode<MaybeObject> handler = ReinterpretCast<MaybeObject>(
-      Load(MachineType::TaggedPointer(), key_base,
+      Load(MachineType::AnyTagged(), key_base,
            IntPtrAdd(entry_offset, IntPtrConstant(kPointerSize))));
 
   // We found the handler.
@@ -3512,7 +3518,7 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
     Label did_set_proto_if_needed(this);
     TNode<BoolT> is_null_proto = SmiNotEqual(
         SmiAnd(flags, SmiConstant(ObjectLiteral::kHasNullPrototype)),
-        SmiConstant(Smi::kZero));
+        SmiConstant(Smi::zero()));
     GotoIfNot(is_null_proto, &did_set_proto_if_needed);
 
     CallRuntime(Runtime::kInternalSetPrototype, context, result,
@@ -3542,13 +3548,12 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
 
   GotoIfNot(IsEmptyFixedArray(LoadElements(CAST(source))), &call_runtime);
 
-  ForEachEnumerableOwnProperty(
-      context, map, CAST(source),
-      [=](TNode<Name> key, TNode<Object> value) {
-        KeyedStoreGenericGenerator::SetPropertyInLiteral(state(), context,
-                                                         result, key, value);
-      },
-      &call_runtime);
+  ForEachEnumerableOwnProperty(context, map, CAST(source),
+                               [=](TNode<Name> key, TNode<Object> value) {
+                                 SetPropertyInLiteral(context, result, key,
+                                                      value);
+                               },
+                               &call_runtime);
   Goto(&done);
 
   BIND(&call_runtime);
@@ -3616,7 +3621,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
       auto mode = INTPTR_PARAMETERS;
       var_properties = CAST(AllocatePropertyArray(length, mode));
       CopyPropertyArrayValues(source_properties, var_properties.value(), length,
-                              SKIP_WRITE_BARRIER, mode);
+                              SKIP_WRITE_BARRIER, mode, DestroySource::kNo);
     }
 
     Goto(&allocate_object);
@@ -3636,7 +3641,8 @@ void AccessorAssembler::GenerateCloneObjectIC() {
     BuildFastLoop(source_start, source_size,
                   [=](Node* field_index) {
                     Node* field_offset = TimesPointerSize(field_index);
-                    Node* field = LoadObjectField(source, field_offset);
+                    TNode<Object> field = LoadObjectField(source, field_offset);
+                    field = CloneIfMutablePrimitive(field);
                     Node* result_offset =
                         IntPtrAdd(field_offset, field_offset_difference);
                     StoreObjectFieldNoWriteBarrier(object, result_offset,

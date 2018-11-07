@@ -9,12 +9,14 @@
   'debugger/wasm-imports': [SKIP],
   # https://crbug.com/v8/7932
   'runtime/command-line-api-without-side-effects': [SKIP],
+
+  # Require optimization, so can't be run on Lite mode.
+  'cpu-profiler/coverage-block': [PASS, ['lite_mode == True', SKIP]],
+  'cpu-profiler/coverage': [PASS, ['lite_mode == True', SKIP]],
 }],  # ALWAYS
 
 ##############################################################################
 ['system == android', {
-  # https://crbug.com/v8/8160
-  'debugger/stepping-with-exposed-injected-script': [FAIL],
   # https://crbug.com/v8/8197
   'debugger/get-possible-breakpoints-class-fields': [SKIP],
 }],  # 'system == android'
@@ -28,6 +30,12 @@
   'debugger/side-effect-free-debug-evaluate': [PASS, FAIL],
   'debugger/evaluate-on-call-frame-in-module': [PASS, FAIL],
 }],  # variant != default
+
+##############################################################################
+['(arch == arm or arch == arm64) and simulator_run', {
+  # Slow tests: https://crbug.com/v8/7783
+  'runtime/console-messages-limits': [PASS, NO_VARIANTS],
+}],  # (arch == arm or arch == arm64) and simulator_run
 
 ##############################################################################
 ['variant == no_wasm_traps', {

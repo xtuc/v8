@@ -46,6 +46,7 @@
 #include "src/arm/constants-arm.h"
 #include "src/assembler.h"
 #include "src/boxed-float.h"
+#include "src/constant-pool.h"
 #include "src/double.h"
 
 namespace v8 {
@@ -401,7 +402,7 @@ class Operand {
   V8_INLINE static Operand Zero();
   V8_INLINE explicit Operand(const ExternalReference& f);
   explicit Operand(Handle<HeapObject> handle);
-  V8_INLINE explicit Operand(Smi* value);
+  V8_INLINE explicit Operand(Smi value);
 
   // rm
   V8_INLINE explicit Operand(Register rm);
@@ -1519,13 +1520,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
     if (pc_offset() >= next_buffer_check_) {
       CheckConstPool(false, true);
     }
-  }
-
-  void PatchConstantPoolAccessInstruction(int pc_offset, int offset,
-                                          ConstantPoolEntry::Access access,
-                                          ConstantPoolEntry::Type type) {
-    // No embedded constant pool support.
-    UNREACHABLE();
   }
 
   // Move a 32-bit immediate into a register, potentially via the constant pool.

@@ -51,6 +51,7 @@ class JSBinopReduction final {
       case CompareOperationHint::kSymbol:
       case CompareOperationHint::kBigInt:
       case CompareOperationHint::kReceiver:
+      case CompareOperationHint::kReceiverOrNullOrUndefined:
       case CompareOperationHint::kInternalizedString:
         break;
     }
@@ -69,6 +70,13 @@ class JSBinopReduction final {
     return (CompareOperationHintOf(node_->op()) ==
             CompareOperationHint::kReceiver) &&
            BothInputsMaybe(Type::Receiver());
+  }
+
+  bool IsReceiverOrNullOrUndefinedCompareOperation() {
+    DCHECK_EQ(1, node_->op()->EffectOutputCount());
+    return (CompareOperationHintOf(node_->op()) ==
+            CompareOperationHint::kReceiverOrNullOrUndefined) &&
+           BothInputsMaybe(Type::ReceiverOrNullOrUndefined());
   }
 
   bool IsStringCompareOperation() {
@@ -94,7 +102,7 @@ class JSBinopReduction final {
     if (BothInputsAre(Type::String()) ||
         BinaryOperationHintOf(node_->op()) == BinaryOperationHint::kString) {
       HeapObjectBinopMatcher m(node_);
-      JSHeapBroker* broker = lowering_->js_heap_broker();
+      JSHeapBroker* broker = lowering_->broker();
       if (m.right().HasValue() && m.right().Ref(broker).IsString()) {
         StringRef right_string = m.right().Ref(broker).AsString();
         if (right_string.length() >= ConsString::kMinLength) return true;
@@ -122,6 +130,15 @@ class JSBinopReduction final {
     update_effect(left_input);
   }
 
+  // Inserts a CheckReceiverOrNullOrUndefined for the left input.
+  void CheckLeftInputToReceiverOrNullOrUndefined() {
+    Node* left_input =
+        graph()->NewNode(simplified()->CheckReceiverOrNullOrUndefined(), left(),
+                         effect(), control());
+    node_->ReplaceInput(0, left_input);
+    update_effect(left_input);
+  }
+
   // Checks that both inputs are Receiver, and if we don't know
   // statically that one side is already a Receiver, insert a
   // CheckReceiver node.
@@ -132,6 +149,22 @@ class JSBinopReduction final {
     if (!right_type().Is(Type::Receiver())) {
       Node* right_input = graph()->NewNode(simplified()->CheckReceiver(),
                                            right(), effect(), control());
+      node_->ReplaceInput(1, right_input);
+      update_effect(right_input);
+    }
+  }
+
+  // Checks that both inputs are Receiver, Null or Undefined and if
+  // we don't know statically that one side is already a Receiver,
+  // Null or Undefined, insert CheckReceiverOrNullOrUndefined nodes.
+  void CheckInputsToReceiverOrNullOrUndefined() {
+    if (!left_type().Is(Type::ReceiverOrNullOrUndefined())) {
+      CheckLeftInputToReceiverOrNullOrUndefined();
+    }
+    if (!right_type().Is(Type::ReceiverOrNullOrUndefined())) {
+      Node* right_input =
+          graph()->NewNode(simplified()->CheckReceiverOrNullOrUndefined(),
+                           right(), effect(), control());
       node_->ReplaceInput(1, right_input);
       update_effect(right_input);
     }
@@ -414,12 +447,12 @@ class JSBinopReduction final {
 // - relax effects from generic but not-side-effecting operations
 
 JSTypedLowering::JSTypedLowering(Editor* editor, JSGraph* jsgraph,
-                                 JSHeapBroker* js_heap_broker, Zone* zone)
+                                 JSHeapBroker* broker, Zone* zone)
     : AdvancedReducer(editor),
       jsgraph_(jsgraph),
-      js_heap_broker_(js_heap_broker),
-      empty_string_type_(Type::HeapConstant(
-          js_heap_broker, factory()->empty_string(), graph()->zone())),
+      broker_(broker),
+      empty_string_type_(Type::HeapConstant(broker, factory()->empty_string(),
+                                            graph()->zone())),
       pointer_comparable_type_(
           Type::Union(Type::Oddball(),
                       Type::Union(Type::SymbolOrReceiver(), empty_string_type_,
@@ -569,7 +602,9 @@ Reduction JSTypedLowering::ReduceJSAdd(Node* node) {
     Node* length =
         graph()->NewNode(simplified()->NumberAdd(), left_length, right_length);
 
-    if (isolate()->IsStringLengthOverflowIntact()) {
+    CellRef string_length_protector(broker(),
+                                    factory()->string_length_protector());
+    if (string_length_protector.value().AsSmi() == Isolate::kProtectorValid) {
       // We can just deoptimize if the {length} is out-of-bounds. Besides
       // generating a shorter code sequence than the version below, this
       // has the additional benefit of not holding on to the lazy {frame_state}
@@ -819,6 +854,46 @@ Reduction JSTypedLowering::ReduceJSEqual(Node* node) {
   } else if (r.IsReceiverCompareOperation()) {
     r.CheckInputsToReceiver();
     return r.ChangeToPureOperator(simplified()->ReferenceEqual());
+  } else if (r.IsReceiverOrNullOrUndefinedCompareOperation()) {
+    // Check that both inputs are Receiver, Null or Undefined.
+    r.CheckInputsToReceiverOrNullOrUndefined();
+
+    // If one side is known to be a detectable receiver now, we
+    // can simply perform reference equality here, since this
+    // known detectable receiver is going to only match itself.
+    if (r.OneInputIs(Type::DetectableReceiver())) {
+      return r.ChangeToPureOperator(simplified()->ReferenceEqual());
+    }
+
+    // Known that both sides are Receiver, Null or Undefined, the
+    // abstract equality operation can be performed like this:
+    //
+    //   if ObjectIsUndetectable(left)
+    //     then ObjectIsUndetectable(right)
+    //     else ReferenceEqual(left, right)
+    //
+    Node* left = r.left();
+    Node* right = r.right();
+    Node* effect = r.effect();
+    Node* control = r.control();
+
+    Node* check = graph()->NewNode(simplified()->ObjectIsUndetectable(), left);
+    Node* branch =
+        graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+
+    Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
+    Node* vtrue = graph()->NewNode(simplified()->ObjectIsUndetectable(), right);
+
+    Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
+    Node* vfalse =
+        graph()->NewNode(simplified()->ReferenceEqual(), left, right);
+
+    control = graph()->NewNode(common()->Merge(2), if_true, if_false);
+    Node* value =
+        graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
+                         vtrue, vfalse, control);
+    ReplaceWithValue(node, value, effect, control);
+    return Replace(value);
   } else if (r.IsStringCompareOperation()) {
     r.CheckInputsToString();
     return r.ChangeToPureOperator(simplified()->StringEqual());
@@ -879,6 +954,13 @@ Reduction JSTypedLowering::ReduceJSStrictEqual(Node* node) {
     // both sides refer to the same Receiver.
     r.CheckLeftInputToReceiver();
     return r.ChangeToPureOperator(simplified()->ReferenceEqual());
+  } else if (r.IsReceiverOrNullOrUndefinedCompareOperation()) {
+    // For strict equality, it's enough to know that one input is a Receiver,
+    // Null or Undefined, as a strict equality comparison with a Receiver,
+    // Null or Undefined can only yield true if both sides refer to the same
+    // instance.
+    r.CheckLeftInputToReceiverOrNullOrUndefined();
+    return r.ChangeToPureOperator(simplified()->ReferenceEqual());
   } else if (r.IsStringCompareOperation()) {
     r.CheckInputsToString();
     return r.ChangeToPureOperator(simplified()->StringEqual());
@@ -933,8 +1015,8 @@ Reduction JSTypedLowering::ReduceJSToNumberInput(Node* input) {
 
   if (input_type.Is(Type::String())) {
     HeapObjectMatcher m(input);
-    if (m.HasValue() && m.Ref(js_heap_broker()).IsString()) {
-      StringRef input_value = m.Ref(js_heap_broker()).AsString();
+    if (m.HasValue() && m.Ref(broker()).IsString()) {
+      StringRef input_value = m.Ref(broker()).AsString();
       double number;
       ASSIGN_RETURN_NO_CHANGE_IF_DATA_MISSING(number, input_value.ToNumber());
       return Replace(jsgraph()->Constant(number));
@@ -1107,8 +1189,8 @@ Reduction JSTypedLowering::ReduceJSLoadNamed(Node* node) {
   DCHECK_EQ(IrOpcode::kJSLoadNamed, node->opcode());
   Node* receiver = NodeProperties::GetValueInput(node, 0);
   Type receiver_type = NodeProperties::GetType(receiver);
-  NameRef name(js_heap_broker(), NamedAccessOf(node->op()).name());
-  NameRef length_str(js_heap_broker(), factory()->length_string());
+  NameRef name(broker(), NamedAccessOf(node->op()).name());
+  NameRef length_str(broker(), factory()->length_string());
   // Optimize "length" property of strings.
   if (name.equals(length_str) && receiver_type.Is(Type::String())) {
     Node* value = graph()->NewNode(simplified()->StringLength(), receiver);
@@ -1541,7 +1623,7 @@ Reduction JSTypedLowering::ReduceJSConstruct(Node* node) {
     // Patch {node} to an indirect call via the {function}s construct stub.
     bool use_builtin_construct_stub = shared.construct_as_builtin();
 
-    CodeRef code(js_heap_broker(),
+    CodeRef code(broker(),
                  use_builtin_construct_stub
                      ? BUILTIN_CODE(isolate(), JSBuiltinsConstructStub)
                      : BUILTIN_CODE(isolate(), JSConstructStubGeneric));
@@ -1625,21 +1707,26 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
     // See ES6 section 9.2.1 [[Call]] ( thisArgument, argumentsList ).
     if (IsClassConstructor(shared.kind())) return NoChange();
 
-    // Load the context from the {target}.
-    Node* context = effect = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForJSFunctionContext()), target,
-        effect, control);
-    NodeProperties::ReplaceContextInput(node, context);
-
-    // Check if we need to convert the {receiver}.
+    // Check if we need to convert the {receiver}, but bailout if it would
+    // require data from a foreign native context.
     if (is_sloppy(shared.language_mode()) && !shared.native() &&
         !receiver_type.Is(Type::Receiver())) {
-      Node* global_proxy = jsgraph()->Constant(function.global_proxy());
+      if (!function.native_context().equals(broker()->native_context())) {
+        return NoChange();
+      }
+      Node* global_proxy =
+          jsgraph()->Constant(function.native_context().global_proxy_object());
       receiver = effect =
           graph()->NewNode(simplified()->ConvertReceiver(convert_mode),
                            receiver, global_proxy, effect, control);
       NodeProperties::ReplaceValueInput(node, receiver, 1);
     }
+
+    // Load the context from the {target}.
+    Node* context = effect = graph()->NewNode(
+        simplified()->LoadField(AccessBuilder::ForJSFunctionContext()), target,
+        effect, control);
+    NodeProperties::ReplaceContextInput(node, context);
 
     // Update the effect dependency for the {node}.
     NodeProperties::ReplaceEffectInput(node, effect);
@@ -2217,6 +2304,22 @@ Reduction JSTypedLowering::ReduceJSParseInt(Node* node) {
   return NoChange();
 }
 
+Reduction JSTypedLowering::ReduceJSResolvePromise(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSResolvePromise, node->opcode());
+  Node* resolution = NodeProperties::GetValueInput(node, 1);
+  Type resolution_type = NodeProperties::GetType(resolution);
+  // We can strength-reduce JSResolvePromise to JSFulfillPromise
+  // if the {resolution} is known to be a primitive, as in that
+  // case we don't perform the implicit chaining (via "then").
+  if (resolution_type.Is(Type::Primitive())) {
+    // JSResolvePromise(p,v:primitive) -> JSFulfillPromise(p,v)
+    node->RemoveInput(3);  // frame state
+    NodeProperties::ChangeOp(node, javascript()->FulfillPromise());
+    return Changed(node);
+  }
+  return NoChange();
+}
+
 Reduction JSTypedLowering::Reduce(Node* node) {
   DisallowHeapAccess no_heap_access;
 
@@ -2325,6 +2428,8 @@ Reduction JSTypedLowering::Reduce(Node* node) {
       return ReduceObjectIsArray(node);
     case IrOpcode::kJSParseInt:
       return ReduceJSParseInt(node);
+    case IrOpcode::kJSResolvePromise:
+      return ReduceJSResolvePromise(node);
     default:
       break;
   }

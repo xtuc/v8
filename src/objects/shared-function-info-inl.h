@@ -39,7 +39,7 @@ void PreParsedScopeData::set_child_data(int index, Object* value,
   CONDITIONAL_WRITE_BARRIER(this, offset, value, mode);
 }
 
-Object** PreParsedScopeData::child_data_start() const {
+ObjectSlot PreParsedScopeData::child_data_start() const {
   return HeapObject::RawField(this, kChildDataStartOffset);
 }
 
@@ -163,8 +163,8 @@ BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, native,
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_asm_wasm_broken,
                     SharedFunctionInfo::IsAsmWasmBrokenBit)
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
-                    requires_instance_fields_initializer,
-                    SharedFunctionInfo::RequiresInstanceFieldsInitializer)
+                    requires_instance_members_initializer,
+                    SharedFunctionInfo::RequiresInstanceMembersInitializer)
 
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, name_should_print_as_anonymous,
                     SharedFunctionInfo::NameShouldPrintAsAnonymousBit)
@@ -483,7 +483,6 @@ int SharedFunctionInfo::builtin_id() const {
 
 void SharedFunctionInfo::set_builtin_id(int builtin_id) {
   DCHECK(Builtins::IsBuiltinId(builtin_id));
-  DCHECK_NE(builtin_id, Builtins::kDeserializeLazy);
   set_function_data(Smi::FromInt(builtin_id), SKIP_WRITE_BARRIER);
 }
 

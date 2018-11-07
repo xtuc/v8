@@ -10,7 +10,6 @@
 #include "src/heap/factory.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
-#include "src/messages.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-array-inl.h"
@@ -155,7 +154,15 @@ Object* RemoveArrayHolesGeneric(Isolate* isolate, Handle<JSReceiver> receiver,
     MAYBE_RETURN(delete_result, ReadOnlyRoots(isolate).exception());
   }
 
-  return *isolate->factory()->NewNumberFromUint(result);
+  // TODO(jgruber, szuend, chromium:897512): This is a workaround to prevent
+  // returning a number greater than array.length to Array.p.sort, which could
+  // trigger OOB accesses. There is still a correctness bug here though in
+  // how we shift around undefineds and delete elements in the two blocks above.
+  // This needs to be fixed soon.
+  const uint32_t number_of_non_undefined_elements = std::min(limit, result);
+
+  return *isolate->factory()->NewNumberFromUint(
+      number_of_non_undefined_elements);
 }
 
 // Collects all defined (non-hole) and non-undefined (array) elements at the
@@ -172,6 +179,7 @@ Object* RemoveArrayHoles(Isolate* isolate, Handle<JSReceiver> receiver,
   Handle<JSObject> object = Handle<JSObject>::cast(receiver);
   if (object->HasStringWrapperElements()) {
     int len = String::cast(Handle<JSValue>::cast(object)->value())->length();
+    DCHECK_LE(len, limit);
     return Smi::FromInt(len);
   }
 
@@ -294,6 +302,7 @@ Object* RemoveArrayHoles(Isolate* isolate, Handle<JSReceiver> receiver,
     }
   }
 
+  DCHECK_LE(result, limit);
   return *isolate->factory()->NewNumberFromUint(result);
 }
 
@@ -551,7 +560,7 @@ RUNTIME_FUNCTION(Runtime_NewArray) {
   DCHECK_LE(3, args.length());
   int const argc = args.length() - 3;
   // TODO(bmeurer): Remove this Arguments nonsense.
-  Arguments argv(argc, args.arguments() - 1);
+  Arguments argv(argc, args.address_of_arg_at(1));
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, constructor, 0);
   CONVERT_ARG_HANDLE_CHECKED(JSReceiver, new_target, argc + 1);
   CONVERT_ARG_HANDLE_CHECKED(HeapObject, type_info, argc + 2);
@@ -731,7 +740,8 @@ RUNTIME_FUNCTION(Runtime_ArrayIncludes_Slow) {
   // Let O be ? ToObject(this value).
   Handle<JSReceiver> object;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, object, Object::ToObject(isolate, handle(args[0], isolate)));
+      isolate, object,
+      Object::ToObject(isolate, Handle<Object>(args[0], isolate)));
 
   // Let len be ? ToLength(? Get(O, "length")).
   int64_t len;
@@ -824,7 +834,7 @@ RUNTIME_FUNCTION(Runtime_ArrayIncludes_Slow) {
 }
 
 RUNTIME_FUNCTION(Runtime_ArrayIndexOf) {
-  HandleScope shs(isolate);
+  HandleScope hs(isolate);
   DCHECK_EQ(3, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, search_element, 1);
   CONVERT_ARG_HANDLE_CHECKED(Object, from_index, 2);
@@ -887,9 +897,9 @@ RUNTIME_FUNCTION(Runtime_ArrayIndexOf) {
     }
   }
 
-  // If the receiver is not a special receiver type, and the length is a valid
-  // element index, perform fast operation tailored to specific ElementsKinds.
-  if (!object->map()->IsSpecialReceiverMap() && len < kMaxUInt32 &&
+  // If the receiver is not a special receiver type, and the length fits
+  // uint32_t, perform fast operation tailored to specific ElementsKinds.
+  if (!object->map()->IsSpecialReceiverMap() && len <= kMaxUInt32 &&
       JSObject::PrototypeHasNoElements(isolate, JSObject::cast(*object))) {
     Handle<JSObject> obj = Handle<JSObject>::cast(object);
     ElementsAccessor* elements = obj->GetElementsAccessor();
@@ -902,6 +912,7 @@ RUNTIME_FUNCTION(Runtime_ArrayIndexOf) {
 
   // Otherwise, perform slow lookups for special receiver types
   for (; index < len; ++index) {
+    HandleScope iteration_hs(isolate);
     // Let elementK be the result of ? Get(O, ! ToString(k)).
     Handle<Object> element_k;
     {

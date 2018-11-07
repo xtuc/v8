@@ -5,22 +5,21 @@
 #ifndef V8_BUILTINS_BUILTINS_TYPED_ARRAY_GEN_H_
 #define V8_BUILTINS_BUILTINS_TYPED_ARRAY_GEN_H_
 
-#include "torque-generated/builtins-base-from-dsl-gen.h"
+#include "src/code-stub-assembler.h"
 
 namespace v8 {
 namespace internal {
 
-class TypedArrayBuiltinsAssembler : public BaseBuiltinsFromDSLAssembler {
+class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
  public:
   explicit TypedArrayBuiltinsAssembler(compiler::CodeAssemblerState* state)
-      : BaseBuiltinsFromDSLAssembler(state) {}
+      : CodeStubAssembler(state) {}
 
   TNode<JSTypedArray> SpeciesCreateByLength(TNode<Context> context,
                                             TNode<JSTypedArray> exemplar,
                                             TNode<Smi> len,
                                             const char* method_name);
 
- protected:
   void GenerateTypedArrayPrototypeIterationMethod(TNode<Context> context,
                                                   TNode<Object> receiver,
                                                   const char* method_name,
@@ -73,11 +72,11 @@ class TypedArrayBuiltinsAssembler : public BaseBuiltinsFromDSLAssembler {
                                           JSTypedArray::kBufferOffset);
   }
 
-  TNode<Object> GetDefaultConstructor(TNode<Context> context,
-                                      TNode<JSTypedArray> exemplar);
+  TNode<JSFunction> GetDefaultConstructor(TNode<Context> context,
+                                          TNode<JSTypedArray> exemplar);
 
-  TNode<Object> TypedArraySpeciesConstructor(TNode<Context> context,
-                                             TNode<JSTypedArray> exemplar);
+  TNode<JSReceiver> TypedArraySpeciesConstructor(TNode<Context> context,
+                                                 TNode<JSTypedArray> exemplar);
 
   TNode<JSTypedArray> SpeciesCreateByArrayBuffer(TNode<Context> context,
                                                  TNode<JSTypedArray> exemplar,

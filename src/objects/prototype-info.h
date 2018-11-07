@@ -67,7 +67,7 @@ class PrototypeInfo : public Struct {
   class BodyDescriptor;
 
  private:
-  DECL_ACCESSORS(object_create_map, MaybeObject)
+  DECL_ACCESSORS2(object_create_map, MaybeObject)
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(PrototypeInfo);
 };
@@ -101,7 +101,7 @@ class PrototypeUsers : public WeakArrayList {
   static const int kNoEmptySlotsMarker = 0;
 
  private:
-  static inline Smi* empty_slot_index(WeakArrayList* array);
+  static inline Smi empty_slot_index(WeakArrayList* array);
   static inline void set_empty_slot_index(WeakArrayList* array, int index);
 
   static void IsSlotEmpty(WeakArrayList* array, int index);

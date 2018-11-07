@@ -127,7 +127,7 @@ class LiftoffAssembler : public TurboAssembler {
     bool has_unused_register(RegClass rc, LiftoffRegList pinned = {}) const {
       if (kNeedI64RegPair && rc == kGpRegPair) {
         LiftoffRegList available_regs =
-            kGpCacheRegList & ~used_registers & ~pinned;
+            kGpCacheRegList.MaskOut(used_registers).MaskOut(pinned);
         return available_regs.GetNumRegsSet() >= 2;
       }
       DCHECK(rc == kGpReg || rc == kFpReg);
@@ -137,7 +137,8 @@ class LiftoffAssembler : public TurboAssembler {
 
     bool has_unused_register(LiftoffRegList candidates,
                              LiftoffRegList pinned = {}) const {
-      LiftoffRegList available_regs = candidates & ~used_registers & ~pinned;
+      LiftoffRegList available_regs =
+          candidates.MaskOut(used_registers).MaskOut(pinned);
       return !available_regs.is_empty();
     }
 
@@ -155,7 +156,8 @@ class LiftoffAssembler : public TurboAssembler {
 
     LiftoffRegister unused_register(LiftoffRegList candidates,
                                     LiftoffRegList pinned = {}) const {
-      LiftoffRegList available_regs = candidates & ~used_registers & ~pinned;
+      LiftoffRegList available_regs =
+          candidates.MaskOut(used_registers).MaskOut(pinned);
       return available_regs.GetFirstRegSet();
     }
 
@@ -316,7 +318,7 @@ class LiftoffAssembler : public TurboAssembler {
   // register, or {no_reg} if target was spilled to the stack.
   void PrepareCall(FunctionSig*, compiler::CallDescriptor*,
                    Register* target = nullptr,
-                   LiftoffRegister* target_instance = nullptr);
+                   Register* target_instance = nullptr);
   // Process return values of the call.
   void FinishCall(FunctionSig*, compiler::CallDescriptor*);
 

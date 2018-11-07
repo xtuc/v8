@@ -120,6 +120,7 @@ namespace internal {
   V(PROMISE_FULFILL_REACTION_JOB_TASK_TYPE)                        \
   V(PROMISE_REJECT_REACTION_JOB_TASK_TYPE)                         \
   V(PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE)                        \
+  V(WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE)                            \
                                                                    \
   V(MICROTASK_QUEUE_TYPE)                                          \
                                                                    \
@@ -185,6 +186,7 @@ namespace internal {
   V(JS_ARRAY_ITERATOR_TYPE)                                        \
   V(JS_ARRAY_TYPE)                                                 \
   V(JS_ASYNC_FROM_SYNC_ITERATOR_TYPE)                              \
+  V(JS_ASYNC_FUNCTION_OBJECT_TYPE)                                 \
   V(JS_ASYNC_GENERATOR_OBJECT_TYPE)                                \
   V(JS_CONTEXT_EXTENSION_OBJECT_TYPE)                              \
   V(JS_DATE_TYPE)                                                  \
@@ -203,6 +205,7 @@ namespace internal {
   V(JS_SET_VALUE_ITERATOR_TYPE)                                    \
   V(JS_STRING_ITERATOR_TYPE)                                       \
   V(JS_WEAK_CELL_TYPE)                                             \
+  V(JS_WEAK_REF_TYPE)                                              \
   V(JS_WEAK_FACTORY_CLEANUP_ITERATOR_TYPE)                         \
   V(JS_WEAK_FACTORY_TYPE)                                          \
   V(JS_WEAK_MAP_TYPE)                                              \
@@ -231,6 +234,7 @@ namespace internal {
   V(JS_INTL_NUMBER_FORMAT_TYPE)        \
   V(JS_INTL_PLURAL_RULES_TYPE)         \
   V(JS_INTL_RELATIVE_TIME_FORMAT_TYPE) \
+  V(JS_INTL_SEGMENT_ITERATOR_TYPE)     \
   V(JS_INTL_SEGMENTER_TYPE)            \
   INSTANCE_TYPE_LIST_AFTER_INTL(V)
 #else
@@ -340,6 +344,8 @@ namespace internal {
     promise_reject_reaction_job_task)                                         \
   V(_, PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE, PromiseResolveThenableJobTask, \
     promise_resolve_thenable_job_task)                                        \
+  V(_, WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE, WeakFactoryCleanupJobTask,         \
+    weak_factory_cleanup_job_task)                                            \
   V(_, MICROTASK_QUEUE_TYPE, MicrotaskQueue, microtask_queue)
 
 // Adapts one STRUCT_LIST_GENERATOR entry to the STRUCT_LIST entry
@@ -350,9 +356,9 @@ namespace internal {
 
 // Adapts one STRUCT_LIST_GENERATOR entry to the STRUCT_MAPS_LIST entry
 #define STRUCT_MAPS_LIST_ADAPTER(V, NAME, Name, name) \
-  V(Map, name##_map, Name##Map)
+  V(Map*, name##_map, Name##Map)
 
-// Produces (Map, struct_name_map, StructNameMap) entries
+// Produces (Map*, struct_name_map, StructNameMap) entries
 #define STRUCT_MAPS_LIST(V) STRUCT_LIST_GENERATOR(STRUCT_MAPS_LIST_ADAPTER, V)
 
 //
@@ -366,7 +372,7 @@ namespace internal {
 
 // Adapts one ALLOCATION_SITE_LIST entry to the ALLOCATION_SITE_MAPS_LIST entry
 #define ALLOCATION_SITE_MAPS_LIST_ADAPTER(V, TYPE, Name, Size, name_size) \
-  V(Map, name_size##_map, Name##Size##Map)
+  V(Map*, name_size##_map, Name##Size##Map)
 
 // Produces (Map, allocation_site_name_map, AllocationSiteNameMap) entries
 #define ALLOCATION_SITE_MAPS_LIST(V) \
@@ -387,7 +393,7 @@ namespace internal {
 
 // Adapts one DATA_HANDLER_LIST entry to the DATA_HANDLER_MAPS_LIST entry.
 #define DATA_HANDLER_MAPS_LIST_ADAPTER(V, TYPE, Name, Size, name_size) \
-  V(Map, name_size##_map, Name##Size##Map)
+  V(Map*, name_size##_map, Name##Size##Map)
 
 // Produces (Map, handler_name_map, HandlerNameMap) entries
 #define DATA_HANDLER_MAPS_LIST(V) \

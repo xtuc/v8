@@ -32,6 +32,7 @@ std::string Type::ToString() const {
 }
 
 bool Type::IsSubtypeOf(const Type* supertype) const {
+  if (supertype->IsTopType()) return true;
   if (IsNever()) return true;
   if (const UnionType* union_type = UnionType::DynamicCast(supertype)) {
     return union_type->IsSupertypeOf(this);
@@ -192,10 +193,19 @@ std::string StructType::ToExplicitString() const {
   return result.str();
 }
 
+std::string StructType::GetGeneratedTypeName() const {
+  return module_->ExternalName() + "::" + GetStructName();
+}
+
 void PrintSignature(std::ostream& os, const Signature& sig, bool with_names) {
   os << "(";
   for (size_t i = 0; i < sig.parameter_types.types.size(); ++i) {
-    if (i > 0) os << ", ";
+    if (i == 0 && sig.implicit_count != 0) os << "implicit ";
+    if (sig.implicit_count > 0 && sig.implicit_count == i) {
+      os << ")(";
+    } else {
+      if (i > 0) os << ", ";
+    }
     if (with_names && !sig.parameter_names.empty()) {
       os << sig.parameter_names[i] << ": ";
     }
@@ -213,8 +223,7 @@ void PrintSignature(std::ostream& os, const Signature& sig, bool with_names) {
   os << " labels ";
   for (size_t i = 0; i < sig.labels.size(); ++i) {
     if (i > 0) os << ", ";
-    if (with_names) os << sig.labels[i].name;
-
+    os << sig.labels[i].name;
     if (sig.labels[i].types.size() > 0) os << "(" << sig.labels[i].types << ")";
   }
 }
@@ -245,8 +254,15 @@ std::ostream& operator<<(std::ostream& os, const ParameterTypes& p) {
   return os;
 }
 
-bool Signature::HasSameTypesAs(const Signature& other) const {
-  if (!(parameter_types.types == other.parameter_types.types &&
+bool Signature::HasSameTypesAs(const Signature& other,
+                               ParameterMode mode) const {
+  auto compare_types = GetTypes();
+  auto other_compare_types = other.GetTypes();
+  if (mode == ParameterMode::kIgnoreImplicit) {
+    compare_types = GetExplicitTypes();
+    other_compare_types = other.GetExplicitTypes();
+  }
+  if (!(compare_types == other.parameter_types.types &&
         parameter_types.var_args == other.parameter_types.var_args &&
         return_type == other.return_type)) {
     return false;
@@ -267,26 +283,6 @@ bool IsAssignableFrom(const Type* to, const Type* from) {
   if (to == from) return true;
   if (from->IsSubtypeOf(to)) return true;
   return TypeOracle::IsImplicitlyConvertableFrom(to, from);
-}
-
-bool IsCompatibleSignature(const Signature& sig, const TypeVector& types,
-                           const std::vector<Label*>& labels) {
-  auto i = sig.parameter_types.types.begin();
-  if (sig.parameter_types.types.size() > types.size()) return false;
-  // TODO(danno): The test below is actually insufficient. The labels'
-  // parameters must be checked too. ideally, the named part of
-  // LabelDeclarationVector would be factored out so that the label count and
-  // parameter types could be passed separately.
-  if (sig.labels.size() != labels.size()) return false;
-  for (auto current : types) {
-    if (i == sig.parameter_types.types.end()) {
-      if (!sig.parameter_types.var_args) return false;
-      if (!IsAssignableFrom(TypeOracle::GetObjectType(), current)) return false;
-    } else {
-      if (!IsAssignableFrom(*i++, current)) return false;
-    }
-  }
-  return true;
 }
 
 bool operator<(const Type& a, const Type& b) {

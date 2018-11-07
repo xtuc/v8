@@ -24,16 +24,10 @@ using TNode = compiler::TNode<T>;
 // Interrupt and stack checks.
 
 void Builtins::Generate_InterruptCheck(MacroAssembler* masm) {
-#ifdef V8_TARGET_ARCH_IA32
-  Assembler::SupportsRootRegisterScope supports_root_register(masm);
-#endif
   masm->TailCallRuntime(Runtime::kInterrupt);
 }
 
 void Builtins::Generate_StackCheck(MacroAssembler* masm) {
-#ifdef V8_TARGET_ARCH_IA32
-  Assembler::SupportsRootRegisterScope supports_root_register(masm);
-#endif
   masm->TailCallRuntime(Runtime::kStackGuard);
 }
 
@@ -249,6 +243,8 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
 
   void GetMarkBit(Node* object, Node** cell, Node** mask) {
     Node* page = WordAnd(object, IntPtrConstant(~kPageAlignmentMask));
+    Node* bitmap = Load(MachineType::Pointer(), page,
+                        IntPtrConstant(MemoryChunk::kMarkBitmapOffset));
 
     {
       // Temp variable to calculate cell offset in bitmap.
@@ -258,8 +254,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
       r0 = WordShr(object, IntPtrConstant(shift));
       r0 = WordAnd(r0, IntPtrConstant((kPageAlignmentMask >> shift) &
                                       ~(Bitmap::kBytesPerCell - 1)));
-      *cell = IntPtrAdd(IntPtrAdd(page, r0),
-                        IntPtrConstant(MemoryChunk::kHeaderSize));
+      *cell = IntPtrAdd(bitmap, r0);
     }
     {
       // Temp variable to calculate bit offset in cell.
@@ -766,13 +761,15 @@ void InternalBuiltinsAssembler::SetCurrentContext(TNode<Context> context) {
 }
 
 void InternalBuiltinsAssembler::EnterMicrotaskContext(
-    TNode<Context> microtask_context) {
+    TNode<Context> native_context) {
+  CSA_ASSERT(this, IsNativeContext(native_context));
+
   auto ref = ExternalReference::handle_scope_implementer_address(isolate());
   Node* const hsi = Load(MachineType::Pointer(), ExternalConstant(ref));
   StoreNoWriteBarrier(
       MachineType::PointerRepresentation(), hsi,
       IntPtrConstant(HandleScopeImplementerOffsets::kMicrotaskContext),
-      BitcastTaggedToWord(microtask_context));
+      BitcastTaggedToWord(native_context));
 
   // Load mirrored std::vector length from
   // HandleScopeImplementer::entered_contexts_count_
@@ -818,8 +815,8 @@ void InternalBuiltinsAssembler::RunPromiseHook(
     Runtime::FunctionId id, TNode<Context> context,
     SloppyTNode<HeapObject> promise_or_capability) {
   Label hook(this, Label::kDeferred), done_hook(this);
-  GotoIf(IsDebugActive(), &hook);
-  Branch(IsPromiseHookEnabledOrHasAsyncEventDelegate(), &hook, &done_hook);
+  Branch(IsPromiseHookEnabledOrDebugIsActiveOrHasAsyncEventDelegate(), &hook,
+         &done_hook);
   BIND(&hook);
   {
     // Get to the underlying JSPromise instance.
@@ -910,7 +907,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
   TNode<Context> current_context = GetCurrentContext();
   TNode<MicrotaskQueue> microtask_queue = GetDefaultMicrotaskQueue();
 
-  Label init_queue_loop(this);
+  Label init_queue_loop(this), done_init_queue_loop(this);
   Goto(&init_queue_loop);
   BIND(&init_queue_loop);
   {
@@ -918,7 +915,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
     Label loop(this, &index), loop_next(this);
 
     TNode<IntPtrT> num_tasks = GetPendingMicrotaskCount(microtask_queue);
-    ReturnIf(IntPtrEqual(num_tasks, IntPtrConstant(0)), UndefinedConstant());
+    GotoIf(IntPtrEqual(num_tasks, IntPtrConstant(0)), &done_init_queue_loop);
 
     TNode<FixedArray> queue = GetQueuedMicrotasks(microtask_queue);
 
@@ -938,6 +935,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
 
       CSA_ASSERT(this, TaggedIsNotSmi(microtask));
 
+      StoreRoot(RootIndex::kCurrentMicrotask, microtask);
       TNode<Map> microtask_map = LoadMap(microtask);
       TNode<Int32T> microtask_type = LoadMapInstanceType(microtask_map);
 
@@ -948,15 +946,21 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
           is_promise_fulfill_reaction_job(this),
           is_promise_reject_reaction_job(this),
           is_promise_resolve_thenable_job(this),
+          is_weak_factory_cleanup_job(this),
           is_unreachable(this, Label::kDeferred);
 
-      int32_t case_values[] = {CALLABLE_TASK_TYPE, CALLBACK_TASK_TYPE,
+      int32_t case_values[] = {CALLABLE_TASK_TYPE,
+                               CALLBACK_TASK_TYPE,
                                PROMISE_FULFILL_REACTION_JOB_TASK_TYPE,
                                PROMISE_REJECT_REACTION_JOB_TASK_TYPE,
-                               PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE};
-      Label* case_labels[] = {
-          &is_callable, &is_callback, &is_promise_fulfill_reaction_job,
-          &is_promise_reject_reaction_job, &is_promise_resolve_thenable_job};
+                               PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE,
+                               WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE};
+      Label* case_labels[] = {&is_callable,
+                              &is_callback,
+                              &is_promise_fulfill_reaction_job,
+                              &is_promise_reject_reaction_job,
+                              &is_promise_resolve_thenable_job,
+                              &is_weak_factory_cleanup_job};
       static_assert(arraysize(case_values) == arraysize(case_labels), "");
       Switch(microtask_type, &is_unreachable, case_values, case_labels,
              arraysize(case_labels));
@@ -969,7 +973,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
         TNode<Context> native_context = LoadNativeContext(microtask_context);
 
         CSA_ASSERT(this, IsNativeContext(native_context));
-        EnterMicrotaskContext(microtask_context);
+        EnterMicrotaskContext(native_context);
         SetCurrentContext(native_context);
 
         TNode<JSReceiver> callable = LoadObjectField<JSReceiver>(
@@ -1014,7 +1018,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
             microtask, PromiseResolveThenableJobTask::kContextOffset);
         TNode<Context> native_context = LoadNativeContext(microtask_context);
         CSA_ASSERT(this, IsNativeContext(native_context));
-        EnterMicrotaskContext(microtask_context);
+        EnterMicrotaskContext(native_context);
         SetCurrentContext(native_context);
 
         Node* const promise_to_resolve = LoadObjectField(
@@ -1040,7 +1044,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
             microtask, PromiseReactionJobTask::kContextOffset);
         TNode<Context> native_context = LoadNativeContext(microtask_context);
         CSA_ASSERT(this, IsNativeContext(native_context));
-        EnterMicrotaskContext(microtask_context);
+        EnterMicrotaskContext(native_context);
         SetCurrentContext(native_context);
 
         Node* const argument =
@@ -1075,7 +1079,7 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
             microtask, PromiseReactionJobTask::kContextOffset);
         TNode<Context> native_context = LoadNativeContext(microtask_context);
         CSA_ASSERT(this, IsNativeContext(native_context));
-        EnterMicrotaskContext(microtask_context);
+        EnterMicrotaskContext(native_context);
         SetCurrentContext(native_context);
 
         Node* const argument =
@@ -1103,6 +1107,26 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
         Goto(&loop_next);
       }
 
+      BIND(&is_weak_factory_cleanup_job);
+      {
+        // Enter the context of the {weak_factory}.
+        TNode<JSWeakFactory> weak_factory = LoadObjectField<JSWeakFactory>(
+            microtask, WeakFactoryCleanupJobTask::kFactoryOffset);
+        TNode<Context> native_context = LoadObjectField<Context>(
+            weak_factory, JSWeakFactory::kNativeContextOffset);
+        CSA_ASSERT(this, IsNativeContext(native_context));
+        EnterMicrotaskContext(native_context);
+        SetCurrentContext(native_context);
+
+        Node* const result = CallRuntime(Runtime::kWeakFactoryCleanupJob,
+                                         native_context, weak_factory);
+
+        GotoIfException(result, &if_exception, &var_exception);
+        LeaveMicrotaskContext();
+        SetCurrentContext(current_context);
+        Goto(&loop_next);
+      }
+
       BIND(&is_unreachable);
       Unreachable();
 
@@ -1119,6 +1143,13 @@ TF_BUILTIN(RunMicrotasks, InternalBuiltinsAssembler) {
       BIND(&loop_next);
       Branch(IntPtrLessThan(index.value(), num_tasks), &loop, &init_queue_loop);
     }
+  }
+
+  BIND(&done_init_queue_loop);
+  {
+    // Reset the "current microtask" on the isolate.
+    StoreRoot(RootIndex::kCurrentMicrotask, UndefinedConstant());
+    Return(UndefinedConstant());
   }
 }
 
@@ -1202,9 +1233,6 @@ void Builtins::Generate_CEntry_Return2_SaveFPRegs_ArgvOnStack_BuiltinExit(
 }
 
 void Builtins::Generate_CallApiGetter(MacroAssembler* masm) {
-#ifdef V8_TARGET_ARCH_IA32
-  Assembler::SupportsRootRegisterScope supports_root_register(masm);
-#endif
   // CallApiGetterStub only exists as a stub to avoid duplicating code between
   // here and code-stubs-<arch>.cc. For example, see CallApiFunctionAndReturn.
   // Here we abuse the instantiated stub to generate code.
@@ -1213,9 +1241,6 @@ void Builtins::Generate_CallApiGetter(MacroAssembler* masm) {
 }
 
 void Builtins::Generate_CallApiCallback_Argc0(MacroAssembler* masm) {
-#ifdef V8_TARGET_ARCH_IA32
-  Assembler::SupportsRootRegisterScope supports_root_register(masm);
-#endif
   // The common variants of CallApiCallbackStub (i.e. all that are embedded into
   // the snapshot) are generated as builtins. The rest remain available as code
   // stubs. Here we abuse the instantiated stub to generate code and avoid
@@ -1226,9 +1251,6 @@ void Builtins::Generate_CallApiCallback_Argc0(MacroAssembler* masm) {
 }
 
 void Builtins::Generate_CallApiCallback_Argc1(MacroAssembler* masm) {
-#ifdef V8_TARGET_ARCH_IA32
-  Assembler::SupportsRootRegisterScope supports_root_register(masm);
-#endif
   // The common variants of CallApiCallbackStub (i.e. all that are embedded into
   // the snapshot) are generated as builtins. The rest remain available as code
   // stubs. Here we abuse the instantiated stub to generate code and avoid
@@ -1300,6 +1322,20 @@ TF_BUILTIN(SetProperty, CodeStubAssembler) {
 
   KeyedStoreGenericGenerator::SetProperty(state(), context, receiver, key,
                                           value, LanguageMode::kStrict);
+}
+
+// ES6 CreateDataProperty(), specialized for the case where objects are still
+// being initialized, and have not yet been made accessible to the user. Thus,
+// any operation here should be unobservable until after the object has been
+// returned.
+TF_BUILTIN(SetPropertyInLiteral, CodeStubAssembler) {
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<JSObject> receiver = CAST(Parameter(Descriptor::kReceiver));
+  TNode<Object> key = CAST(Parameter(Descriptor::kKey));
+  TNode<Object> value = CAST(Parameter(Descriptor::kValue));
+
+  KeyedStoreGenericGenerator::SetPropertyInLiteral(state(), context, receiver,
+                                                   key, value);
 }
 
 }  // namespace internal

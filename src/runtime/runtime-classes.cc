@@ -12,9 +12,10 @@
 #include "src/debug/debug.h"
 #include "src/elements.h"
 #include "src/isolate-inl.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/objects/smi.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -146,9 +147,9 @@ inline void SetHomeObject(Isolate* isolate, JSFunction* method,
 //    shared name.
 template <typename Dictionary>
 MaybeHandle<Object> GetMethodAndSetHomeObjectAndName(
-    Isolate* isolate, Arguments& args, Smi* index, Handle<JSObject> home_object,
+    Isolate* isolate, Arguments& args, Smi index, Handle<JSObject> home_object,
     Handle<String> name_prefix, Handle<Object> key) {
-  int int_index = Smi::ToInt(index);
+  int int_index = index.value();
 
   // Class constructor and prototype values do not require post processing.
   if (int_index < ClassBoilerplate::kFirstDynamicArgumentIndex) {
@@ -586,7 +587,7 @@ MaybeHandle<Object> DefineClass(Isolate* isolate,
 
   Handle<JSObject> prototype = CreateClassPrototype(isolate);
   DCHECK_EQ(*constructor, args[ClassBoilerplate::kConstructorArgumentIndex]);
-  args[ClassBoilerplate::kPrototypeArgumentIndex] = *prototype;
+  args.set_at(ClassBoilerplate::kPrototypeArgumentIndex, *prototype);
 
   if (!InitClassConstructor(isolate, class_boilerplate, constructor_parent,
                             constructor, args) ||
@@ -637,9 +638,9 @@ MaybeHandle<JSReceiver> GetSuperHolder(
   PrototypeIterator iter(isolate, home_object);
   Handle<Object> proto = PrototypeIterator::GetCurrent(iter);
   if (!proto->IsJSReceiver()) {
-    MessageTemplate::Template message =
-        mode == SuperMode::kLoad ? MessageTemplate::kNonObjectPropertyLoad
-                                 : MessageTemplate::kNonObjectPropertyStore;
+    MessageTemplate message = mode == SuperMode::kLoad
+                                  ? MessageTemplate::kNonObjectPropertyLoad
+                                  : MessageTemplate::kNonObjectPropertyStore;
     Handle<Name> name;
     if (!maybe_name.ToHandle(&name)) {
       name = isolate->factory()->Uint32ToString(index);

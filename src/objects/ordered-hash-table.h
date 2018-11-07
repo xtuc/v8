@@ -8,6 +8,7 @@
 #include "src/globals.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/js-objects.h"
+#include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -621,8 +622,7 @@ class JSCollectionIterator : public JSObject {
   // [index]: The index into the data table.
   DECL_ACCESSORS(index, Object)
 
-  // Dispatched behavior.
-  DECL_PRINTER(JSCollectionIterator)
+  void JSCollectionIteratorPrint(std::ostream& os, const char* name);
 
   static const int kTableOffset = JSObject::kHeaderSize;
   static const int kIndexOffset = kTableOffset + kPointerSize;

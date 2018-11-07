@@ -19,6 +19,7 @@
 #include "src/interpreter/interpreter.h"
 #include "src/isolate-inl.h"
 #include "src/objects/debug-objects-inl.h"
+#include "src/objects/heap-object-inl.h"
 #include "src/objects/js-collection-inl.h"
 #include "src/objects/js-generator-inl.h"
 #include "src/objects/js-promise-inl.h"
@@ -80,8 +81,7 @@ RUNTIME_FUNCTION_RETURN_PAIR(Runtime_DebugBreakOnBytecode) {
   // We need to deserialize now to ensure we don't hit the debug break again
   // after deserializing.
   OperandScale operand_scale = OperandScale::kSingle;
-  isolate->interpreter()->GetAndMaybeDeserializeBytecodeHandler(bytecode,
-                                                                operand_scale);
+  isolate->interpreter()->GetBytecodeHandler(bytecode, operand_scale);
 
   if (side_effect_check_failed) {
     return MakePair(ReadOnlyRoots(isolate).exception(),
@@ -746,11 +746,13 @@ RUNTIME_FUNCTION(Runtime_IncBlockCounter) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
-RUNTIME_FUNCTION(Runtime_DebugAsyncFunctionSuspended) {
+RUNTIME_FUNCTION(Runtime_DebugAsyncFunctionEntered) {
   DCHECK_EQ(1, args.length());
   HandleScope scope(isolate);
   CONVERT_ARG_HANDLE_CHECKED(JSPromise, promise, 0);
-  isolate->OnAsyncFunctionStateChanged(promise, debug::kAsyncFunctionSuspended);
+  isolate->RunPromiseHook(PromiseHookType::kInit, promise,
+                          isolate->factory()->undefined_value());
+  if (isolate->debug()->is_active()) isolate->PushPromise(promise);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -765,6 +767,14 @@ RUNTIME_FUNCTION(Runtime_DebugAsyncFunctionFinished) {
                                          debug::kAsyncFunctionFinished);
   }
   return *promise;
+}
+
+RUNTIME_FUNCTION(Runtime_DebugAsyncFunctionSuspended) {
+  DCHECK_EQ(1, args.length());
+  HandleScope scope(isolate);
+  CONVERT_ARG_HANDLE_CHECKED(JSPromise, promise, 0);
+  isolate->OnAsyncFunctionStateChanged(promise, debug::kAsyncFunctionSuspended);
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_LiveEditPatchScript) {

@@ -13,7 +13,7 @@ namespace internal {
 
 class StartupSerializer;
 
-class PartialSerializer : public Serializer<> {
+class PartialSerializer : public Serializer {
  public:
   PartialSerializer(Isolate* isolate, StartupSerializer* startup_serializer,
                     v8::SerializeEmbedderFieldsCallback callback);
@@ -31,17 +31,20 @@ class PartialSerializer : public Serializer<> {
 
   bool ShouldBeInThePartialSnapshotCache(HeapObject* o);
 
-  void SerializeEmbedderFields();
+  bool SerializeJSObjectWithEmbedderFields(Object* obj, HowToCode how_to_code,
+                                           WhereToPoint where_to_point);
 
   void CheckRehashability(HeapObject* obj);
 
   StartupSerializer* startup_serializer_;
-  std::vector<JSObject*> embedder_field_holders_;
   v8::SerializeEmbedderFieldsCallback serialize_embedder_fields_;
   // Indicates whether we only serialized hash tables that we can rehash.
   // TODO(yangguo): generalize rehashing, and remove this flag.
   bool can_be_rehashed_;
   Context* context_;
+
+  // Used to store serialized data for embedder fields.
+  SnapshotByteSink embedder_fields_sink_;
   DISALLOW_COPY_AND_ASSIGN(PartialSerializer);
 };
 

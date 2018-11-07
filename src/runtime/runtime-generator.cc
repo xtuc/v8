@@ -12,6 +12,18 @@
 namespace v8 {
 namespace internal {
 
+RUNTIME_FUNCTION(Runtime_AsyncFunctionAwaitCaught) {
+  // Runtime call is implemented in InterpreterIntrinsics and lowered in
+  // JSIntrinsicLowering
+  UNREACHABLE();
+}
+
+RUNTIME_FUNCTION(Runtime_AsyncFunctionAwaitUncaught) {
+  // Runtime call is implemented in InterpreterIntrinsics and lowered in
+  // JSIntrinsicLowering
+  UNREACHABLE();
+}
+
 RUNTIME_FUNCTION(Runtime_AsyncFunctionEnter) {
   // Runtime call is implemented in InterpreterIntrinsics and lowered in
   // JSIntrinsicLowering
@@ -73,6 +85,18 @@ RUNTIME_FUNCTION(Runtime_GeneratorGetFunction) {
   return generator->function();
 }
 
+RUNTIME_FUNCTION(Runtime_AsyncGeneratorAwaitCaught) {
+  // Runtime call is implemented in InterpreterIntrinsics and lowered in
+  // JSIntrinsicLowering
+  UNREACHABLE();
+}
+
+RUNTIME_FUNCTION(Runtime_AsyncGeneratorAwaitUncaught) {
+  // Runtime call is implemented in InterpreterIntrinsics and lowered in
+  // JSIntrinsicLowering
+  UNREACHABLE();
+}
+
 RUNTIME_FUNCTION(Runtime_AsyncGeneratorResolve) {
   // Runtime call is implemented in InterpreterIntrinsics and lowered in
   // JSIntrinsicLowering
@@ -102,8 +126,7 @@ RUNTIME_FUNCTION(Runtime_GeneratorGetResumeMode) {
 RUNTIME_FUNCTION(Runtime_AsyncGeneratorHasCatchHandlerForPC) {
   DisallowHeapAllocation no_allocation_scope;
   DCHECK_EQ(1, args.length());
-  DCHECK(args[0]->IsJSAsyncGeneratorObject());
-  JSAsyncGeneratorObject* generator = JSAsyncGeneratorObject::cast(args[0]);
+  CONVERT_ARG_CHECKED(JSAsyncGeneratorObject, generator, 0);
 
   int state = generator->continuation();
   DCHECK_NE(state, JSAsyncGeneratorObject::kGeneratorExecuting);

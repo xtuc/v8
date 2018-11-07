@@ -6,6 +6,7 @@
 
 #include "src/assembler-inl.h"
 #include "src/code-tracer.h"
+#include "src/wasm/graph-builder-interface.h"
 #include "src/wasm/wasm-import-wrapper-cache-inl.h"
 #include "src/wasm/wasm-memory.h"
 #include "src/wasm/wasm-objects-inl.h"
@@ -182,11 +183,11 @@ uint32_t TestingModuleBuilder::AddBytes(Vector<const byte> bytes) {
   OwnedVector<uint8_t> new_bytes = OwnedVector<uint8_t>::New(new_size);
   memcpy(new_bytes.start(), old_bytes.start(), old_size);
   memcpy(new_bytes.start() + bytes_offset, bytes.start(), bytes.length());
-  native_module_->set_wire_bytes(std::move(new_bytes));
+  native_module_->SetWireBytes(std::move(new_bytes));
   return bytes_offset;
 }
 
-ModuleEnv TestingModuleBuilder::CreateModuleEnv() {
+CompilationEnv TestingModuleBuilder::CreateCompilationEnv() {
   return {
       test_module_ptr_,
       trap_handler::IsTrapHandlerEnabled() ? kUseTrapHandler : kNoTrapHandler,
@@ -208,9 +209,8 @@ Handle<WasmInstanceObject> TestingModuleBuilder::InitInstanceObject() {
   Handle<Script> script =
       isolate_->factory()->NewScript(isolate_->factory()->empty_string());
   script->set_type(Script::TYPE_WASM);
-  ModuleEnv env = CreateModuleEnv();
   Handle<WasmModuleObject> module_object =
-      WasmModuleObject::New(isolate_, enabled_features_, test_module_, env, {},
+      WasmModuleObject::New(isolate_, enabled_features_, test_module_, {},
                             script, Handle<ByteArray>::null());
   // This method is called when we initialize TestEnvironment. We don't
   // have a memory yet, so we won't create it here. We'll update the
@@ -252,7 +252,7 @@ void TestBuildingGraphWithBuilder(compiler::WasmGraphBuilder* builder,
 }
 
 void TestBuildingGraph(Zone* zone, compiler::JSGraph* jsgraph,
-                       ModuleEnv* module, FunctionSig* sig,
+                       CompilationEnv* module, FunctionSig* sig,
                        compiler::SourcePositionTable* source_position_table,
                        const byte* start, const byte* end) {
   compiler::WasmGraphBuilder builder(module, zone, jsgraph, sig,
@@ -410,8 +410,7 @@ void WasmFunctionCompiler::Build(const byte* start, const byte* end) {
                                          ->native_module()
                                          ->wire_bytes();
 
-  ModuleEnv module_env = builder_->CreateModuleEnv();
-  ErrorThrower thrower(isolate(), "WasmFunctionCompiler::Build");
+  CompilationEnv env = builder_->CreateCompilationEnv();
   ScopedVector<uint8_t> func_wire_bytes(function_->code.length());
   memcpy(func_wire_bytes.start(), wire_bytes.start() + function_->code.offset(),
          func_wire_bytes.length());
@@ -420,16 +419,14 @@ void WasmFunctionCompiler::Build(const byte* start, const byte* end) {
                          func_wire_bytes.start(), func_wire_bytes.end()};
   NativeModule* native_module =
       builder_->instance_object()->module_object()->native_module();
-  WasmCompilationUnit unit(isolate()->wasm_engine(), &module_env, native_module,
-                           func_body, function_->func_index,
-                           isolate()->counters(), tier);
+  WasmCompilationUnit unit(isolate()->wasm_engine(), native_module,
+                           function_->func_index, tier);
   WasmFeatures unused_detected_features;
-  unit.ExecuteCompilation(&unused_detected_features);
-  WasmCode* wasm_code = unit.FinishCompilation(&thrower);
-  if (WasmCode::ShouldBeLogged(isolate())) {
-    wasm_code->LogCode(isolate());
-  }
-  CHECK(!thrower.error());
+  unit.ExecuteCompilation(
+      &env, native_module->compilation_state()->GetWireBytesStorage(),
+      isolate()->counters(), &unused_detected_features);
+  CHECK(!unit.failed());
+  if (WasmCode::ShouldBeLogged(isolate())) unit.result()->LogCode(isolate());
 }
 
 WasmFunctionCompiler::WasmFunctionCompiler(Zone* zone, FunctionSig* sig,

@@ -75,7 +75,7 @@
   # BUG(5193). The cpu profiler tests are notoriously flaky.
   'test-profile-generator/RecordStackTraceAtStartProfiling': [SKIP],
   'test-cpu-profiler/CollectCpuProfile': [SKIP],
-  'test-cpu-profiler/CollectCpuProfileCallerLineNumbers': [FAIL, PASS],
+  'test-cpu-profiler/CollectCpuProfileCallerLineNumbers': [SKIP],
   'test-cpu-profiler/CollectCpuProfileSamples': [SKIP],
   'test-cpu-profiler/CollectDeoptEvents': [SKIP],
   'test-cpu-profiler/CpuProfileDeepStack': [SKIP],
@@ -91,13 +91,8 @@
   'test-cpu-profiler/NativeAccessorUninitializedIC': [SKIP],
   'test-cpu-profiler/SampleWhenFrameIsNotSetup': [SKIP],
   'test-cpu-profiler/TracingCpuProfiler': [SKIP],
+  'test-cpu-profiler/MultipleIsolates': [SKIP],
   'test-sampler/LibSamplerCollectSample': [SKIP],
-
-  # BUG(v8:8209). Flaky
-  'test-cpu-profiler/Issue1398': [SKIP],
-
-  # BUG(7702). Flaky data race and other test failures.
-  'test-cpu-profiler/MultipleProfilers': [SKIP],
 
   # BUG(7202). The test is flaky.
   'test-cpu-profiler/NativeFrameStackTrace': [SKIP],
@@ -127,6 +122,9 @@
   'test-serialize/SnapshotCreatorUnknownHandles': [FAIL],
   'test-serialize/SnapshotCreatorNoExternalReferencesCustomFail1': [FAIL],
   'test-serialize/SnapshotCreatorNoExternalReferencesCustomFail2': [FAIL],
+
+  # BUG(v8:8296). Flaky OOM test.
+  'test-heap/OutOfMemorySmallObjects': [SKIP],
 
   ############################################################################
   # Slow tests.
@@ -177,6 +175,12 @@
   'test-api/Float32Array': [SKIP],
   'test-api/Float64Array': [SKIP],
 }],  # 'arch == arm64 and mode == debug and simulator_run'
+
+##############################################################################
+['variant == nooptimization and (arch == arm or arch == arm64) and simulator_run', {
+  # Slow tests: https://crbug.com/v8/7783
+  'test-cpu-profiler/MultipleIsolates': [SKIP],
+}],  # variant == nooptimization and (arch == arm or arch == arm64) and simulator_run
 
 ##############################################################################
 # TODO(ahaas): Port multiple return values to ARM, MIPS, S390 and PPC

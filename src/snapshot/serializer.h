@@ -11,7 +11,7 @@
 #include "src/isolate.h"
 #include "src/log.h"
 #include "src/objects.h"
-#include "src/snapshot/default-serializer-allocator.h"
+#include "src/snapshot/serializer-allocator.h"
 #include "src/snapshot/serializer-common.h"
 #include "src/snapshot/snapshot-source-sink.h"
 
@@ -127,7 +127,33 @@ class CodeAddressMap : public CodeEventLogger {
   NameMap address_to_name_map_;
 };
 
-template <class AllocatorT = DefaultSerializerAllocator>
+class ObjectCacheIndexMap {
+ public:
+  ObjectCacheIndexMap() : map_(), next_index_(0) {}
+
+  // If |obj| is in the map, immediately return true.  Otherwise add it to the
+  // map and return false. In either case set |*index_out| to the index
+  // associated with the map.
+  bool LookupOrInsert(HeapObject* obj, int* index_out) {
+    Maybe<uint32_t> maybe_index = map_.Get(obj);
+    if (maybe_index.IsJust()) {
+      *index_out = maybe_index.FromJust();
+      return true;
+    }
+    *index_out = next_index_;
+    map_.Set(obj, next_index_++);
+    return false;
+  }
+
+ private:
+  DisallowHeapAllocation no_allocation_;
+
+  HeapObjectToIndexHashMap map_;
+  int next_index_;
+
+  DISALLOW_COPY_AND_ASSIGN(ObjectCacheIndexMap);
+};
+
 class Serializer : public SerializerDeserializer {
  public:
   explicit Serializer(Isolate* isolate);
@@ -168,13 +194,13 @@ class Serializer : public SerializerDeserializer {
 
   virtual bool MustBeDeferred(HeapObject* object);
 
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override;
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override;
   void SerializeRootObject(Object* object);
 
   void PutRoot(RootIndex root_index, HeapObject* object, HowToCode how,
                WhereToPoint where, int skip);
-  void PutSmi(Smi* smi);
+  void PutSmi(Smi smi);
   void PutBackReference(HeapObject* object, SerializerReference reference);
   void PutAttachedReference(SerializerReference reference,
                             HowToCode how_to_code, WhereToPoint where_to_point);
@@ -194,20 +220,17 @@ class Serializer : public SerializerDeserializer {
   bool SerializeBackReference(HeapObject* obj, HowToCode how_to_code,
                               WhereToPoint where_to_point, int skip);
 
-  // Returns true if the object was successfully serialized as a builtin
-  // reference.
-  bool SerializeBuiltinReference(HeapObject* obj, HowToCode how_to_code,
-                                 WhereToPoint where_to_point, int skip);
-
   // Returns true if the given heap object is a bytecode handler code object.
   bool ObjectIsBytecodeHandler(HeapObject* obj) const;
 
-  inline void FlushSkip(int skip) {
+  static inline void FlushSkip(SnapshotByteSink* sink, int skip) {
     if (skip != 0) {
-      sink_.Put(kSkip, "SkipFromSerializeObject");
-      sink_.PutInt(skip, "SkipDistanceFromSerializeObject");
+      sink->Put(kSkip, "SkipFromSerializeObject");
+      sink->PutInt(skip, "SkipDistanceFromSerializeObject");
     }
   }
+
+  inline void FlushSkip(int skip) { FlushSkip(&sink_, skip); }
 
   ExternalReferenceEncoder::Value EncodeExternalReference(Address addr) {
     return external_reference_encoder_.Encode(addr);
@@ -242,7 +265,7 @@ class Serializer : public SerializerDeserializer {
 
   SerializerReferenceMap* reference_map() { return &reference_map_; }
   const RootIndexMap* root_index_map() const { return &root_index_map_; }
-  AllocatorT* allocator() { return &allocator_; }
+  SerializerAllocator* allocator() { return &allocator_; }
 
   SnapshotByteSink sink_;  // Used directly by subclasses.
 
@@ -255,7 +278,7 @@ class Serializer : public SerializerDeserializer {
   std::vector<byte> code_buffer_;
   std::vector<HeapObject*> deferred_objects_;  // To handle stack overflow.
   int recursion_depth_ = 0;
-  AllocatorT allocator_;
+  SerializerAllocator allocator_;
 
 #ifdef OBJECT_PRINT
   static const int kInstanceTypes = LAST_TYPE + 1;
@@ -267,15 +290,14 @@ class Serializer : public SerializerDeserializer {
   std::vector<HeapObject*> stack_;
 #endif  // DEBUG
 
-  friend class DefaultSerializerAllocator;
+  friend class SerializerAllocator;
 
   DISALLOW_COPY_AND_ASSIGN(Serializer);
 };
 
 class RelocInfoIterator;
 
-template <class AllocatorT>
-class Serializer<AllocatorT>::ObjectSerializer : public ObjectVisitor {
+class Serializer::ObjectSerializer : public ObjectVisitor {
  public:
   ObjectSerializer(Serializer* serializer, HeapObject* obj,
                    SnapshotByteSink* sink, HowToCode how_to_code,
@@ -298,9 +320,10 @@ class Serializer<AllocatorT>::ObjectSerializer : public ObjectVisitor {
   void Serialize();
   void SerializeObject();
   void SerializeDeferred();
-  void VisitPointers(HeapObject* host, Object** start, Object** end) override;
-  void VisitPointers(HeapObject* host, MaybeObject** start,
-                     MaybeObject** end) override;
+  void VisitPointers(HeapObject* host, ObjectSlot start,
+                     ObjectSlot end) override;
+  void VisitPointers(HeapObject* host, MaybeObjectSlot start,
+                     MaybeObjectSlot end) override;
   void VisitEmbeddedPointer(Code* host, RelocInfo* target) override;
   void VisitExternalReference(Foreign* host, Address* p) override;
   void VisitExternalReference(Code* host, RelocInfo* rinfo) override;
@@ -329,7 +352,6 @@ class Serializer<AllocatorT>::ObjectSerializer : public ObjectVisitor {
   Serializer* serializer_;
   HeapObject* object_;
   SnapshotByteSink* sink_;
-  std::map<void*, Smi*> backing_stores;
   int reference_representation_;
   int bytes_processed_so_far_;
 };

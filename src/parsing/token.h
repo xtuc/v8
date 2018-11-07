@@ -55,24 +55,34 @@ namespace internal {
   T(name, string, precedence)
 
 #define TOKEN_LIST(T, K, C)                                        \
-  /* End of source indicator. */                                   \
-  T(EOS, "EOS", 0)                                                 \
+                                                                   \
+  /* BEGIN Property */                                             \
+  /* BEGIN PropertyOrCall */                                       \
+  /* ES6 Template Literals */                                      \
+  T(TEMPLATE_SPAN, nullptr, 0)                                     \
+  T(TEMPLATE_TAIL, nullptr, 0)                                     \
                                                                    \
   /* Punctuators (ECMA-262, section 7.7, page 15). */              \
-  T(LPAREN, "(", 0)                                                \
-  T(RPAREN, ")", 0)                                                \
+  T(PERIOD, ".", 0)                                                \
   T(LBRACK, "[", 0)                                                \
+  /* END Property */                                               \
+  T(LPAREN, "(", 0)                                                \
+  /* END PropertyOrCall */                                         \
+  T(RPAREN, ")", 0)                                                \
   T(RBRACK, "]", 0)                                                \
   T(LBRACE, "{", 0)                                                \
-  T(RBRACE, "}", 0)                                                \
   T(COLON, ":", 0)                                                 \
-  T(SEMICOLON, ";", 0)                                             \
-  T(PERIOD, ".", 0)                                                \
   T(ELLIPSIS, "...", 0)                                            \
   T(CONDITIONAL, "?", 3)                                           \
   T(INC, "++", 0)                                                  \
   T(DEC, "--", 0)                                                  \
   T(ARROW, "=>", 0)                                                \
+  /* BEGIN AutoSemicolon */                                        \
+  T(SEMICOLON, ";", 0)                                             \
+  T(RBRACE, "}", 0)                                                \
+  /* End of source indicator. */                                   \
+  T(EOS, "EOS", 0)                                                 \
+  /* END AutoSemicolon */                                          \
                                                                    \
   /* Assignment operators. */                                      \
   /* IsAssignmentOp() relies on this block of enum values being */ \
@@ -149,6 +159,8 @@ namespace internal {
   T(BIGINT, nullptr, 0)                                            \
   T(STRING, nullptr, 0)                                            \
                                                                    \
+  /* BEGIN Callable */                                             \
+  K(SUPER, "super", 0)                                             \
   /* BEGIN AnyIdentifier */                                        \
   /* Identifiers (not keywords or future reserved words). */       \
   T(IDENTIFIER, nullptr, 0)                                        \
@@ -162,13 +174,13 @@ namespace internal {
   T(FUTURE_STRICT_RESERVED_WORD, nullptr, 0)                       \
   T(ESCAPED_STRICT_RESERVED_WORD, nullptr, 0)                      \
   K(ENUM, "enum", 0)                                               \
+  /* END Callable */                                               \
   /* END AnyIdentifier */                                          \
   K(CLASS, "class", 0)                                             \
   K(CONST, "const", 0)                                             \
   K(EXPORT, "export", 0)                                           \
   K(EXTENDS, "extends", 0)                                         \
   K(IMPORT, "import", 0)                                           \
-  K(SUPER, "super", 0)                                             \
   T(PRIVATE_NAME, nullptr, 0)                                      \
                                                                    \
   /* Illegal token - not able to scan. */                          \
@@ -179,10 +191,6 @@ namespace internal {
   T(WHITESPACE, nullptr, 0)                                        \
   T(UNINITIALIZED, nullptr, 0)                                     \
   T(REGEXP_LITERAL, nullptr, 0)                                    \
-                                                                   \
-  /* ES6 Template Literals */                                      \
-  T(TEMPLATE_SPAN, nullptr, 0)                                     \
-  T(TEMPLATE_TAIL, nullptr, 0)                                     \
                                                                    \
   /* Contextual keyword tokens */                                  \
   C(GET, "get", 0)                                                 \
@@ -235,6 +243,12 @@ class Token {
     return false;
   }
 
+  static bool IsCallable(Value token) { return IsInRange(token, SUPER, ENUM); }
+
+  static bool IsAutoSemicolon(Value token) {
+    return IsInRange(token, SEMICOLON, EOS);
+  }
+
   static bool IsAnyIdentifier(Value token) {
     return IsInRange(token, IDENTIFIER, ENUM);
   }
@@ -245,6 +259,14 @@ class Token {
 
   static bool IsLiteral(Value token) {
     return IsInRange(token, NULL_LITERAL, STRING);
+  }
+
+  static bool IsProperty(Value token) {
+    return IsInRange(token, TEMPLATE_SPAN, LBRACK);
+  }
+
+  static bool IsPropertyOrCall(Value token) {
+    return IsInRange(token, TEMPLATE_SPAN, LPAREN);
   }
 
   static bool IsAssignmentOp(Value token) {
@@ -280,10 +302,6 @@ class Token {
   static bool IsCountOp(Value op) { return IsInRange(op, INC, DEC); }
 
   static bool IsShiftOp(Value op) { return IsInRange(op, SHL, SHR); }
-
-  static bool IsTrivialExpressionToken(Value op) {
-    return IsInRange(op, THIS, IDENTIFIER);
-  }
 
   // Returns a string corresponding to the JS token string
   // (.e., "<" for the token LT) or nullptr if the token doesn't

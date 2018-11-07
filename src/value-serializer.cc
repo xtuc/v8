@@ -20,6 +20,7 @@
 #include "src/objects/js-collection-inl.h"
 #include "src/objects/js-regexp-inl.h"
 #include "src/objects/ordered-hash-table-inl.h"
+#include "src/objects/smi.h"
 #include "src/snapshot/code-serializer.h"
 #include "src/transitions.h"
 #include "src/wasm/wasm-engine.h"
@@ -418,7 +419,7 @@ void ValueSerializer::WriteOddball(Oddball* oddball) {
   WriteTag(tag);
 }
 
-void ValueSerializer::WriteSmi(Smi* smi) {
+void ValueSerializer::WriteSmi(Smi smi) {
   static_assert(kSmiValueSize <= 32, "Expected SMI <= 32 bits.");
   WriteTag(SerializationTag::kInt32);
   WriteZigZag<int32_t>(smi->value());
@@ -517,12 +518,14 @@ Maybe<bool> ValueSerializer::WriteJSReceiver(Handle<JSReceiver> receiver) {
     case JS_TYPED_ARRAY_TYPE:
     case JS_DATA_VIEW_TYPE:
       return WriteJSArrayBufferView(JSArrayBufferView::cast(*receiver));
-    case WASM_MODULE_TYPE:
-      if (!FLAG_wasm_disable_structured_cloning) {
+    case WASM_MODULE_TYPE: {
+      auto enabled_features = wasm::WasmFeaturesFromIsolate(isolate_);
+      if (!FLAG_wasm_disable_structured_cloning || enabled_features.threads) {
         // Only write WebAssembly modules if not disabled by a flag.
         return WriteWasmModule(Handle<WasmModuleObject>::cast(receiver));
       }
       break;
+    }
     case WASM_MEMORY_TYPE: {
       auto enabled_features = wasm::WasmFeaturesFromIsolate(isolate_);
       if (enabled_features.threads) {
@@ -965,8 +968,7 @@ Maybe<uint32_t> ValueSerializer::WriteJSObjectPropertiesSlow(
   return Just(properties_written);
 }
 
-void ValueSerializer::ThrowDataCloneError(
-    MessageTemplate::Template template_index) {
+void ValueSerializer::ThrowDataCloneError(MessageTemplate template_index) {
   return ThrowDataCloneError(template_index,
                              isolate_->factory()->empty_string());
 }
@@ -979,10 +981,10 @@ Maybe<bool> ValueSerializer::ThrowIfOutOfMemory() {
   return Just(true);
 }
 
-void ValueSerializer::ThrowDataCloneError(
-    MessageTemplate::Template template_index, Handle<Object> arg0) {
+void ValueSerializer::ThrowDataCloneError(MessageTemplate index,
+                                          Handle<Object> arg0) {
   Handle<String> message =
-      MessageTemplate::FormatMessage(isolate_, template_index, arg0);
+      MessageFormatter::FormatMessage(isolate_, index, arg0);
   if (delegate_) {
     delegate_->ThrowDataCloneError(Utils::ToLocal(message));
   } else {
@@ -1006,7 +1008,7 @@ ValueDeserializer::ValueDeserializer(Isolate* isolate,
           ReadOnlyRoots(isolate_).empty_fixed_array())) {}
 
 ValueDeserializer::~ValueDeserializer() {
-  GlobalHandles::Destroy(Handle<Object>::cast(id_map_).location());
+  GlobalHandles::Destroy(id_map_.location());
 
   Handle<Object> transfer_map_handle;
   if (array_buffer_transfer_map_.ToHandle(&transfer_map_handle)) {
@@ -1140,7 +1142,7 @@ void ValueDeserializer::TransferArrayBuffer(
   Handle<SimpleNumberDictionary> new_dictionary = SimpleNumberDictionary::Set(
       isolate_, dictionary, transfer_id, array_buffer);
   if (!new_dictionary.is_identical_to(dictionary)) {
-    GlobalHandles::Destroy(Handle<Object>::cast(dictionary).location());
+    GlobalHandles::Destroy(dictionary.location());
     array_buffer_transfer_map_ =
         isolate_->global_handles()->Create(*new_dictionary);
   }
@@ -1743,7 +1745,9 @@ MaybeHandle<JSArrayBufferView> ValueDeserializer::ReadJSArrayBufferView(
 }
 
 MaybeHandle<JSObject> ValueDeserializer::ReadWasmModuleTransfer() {
-  if (FLAG_wasm_disable_structured_cloning || expect_inline_wasm()) {
+  auto enabled_features = wasm::WasmFeaturesFromIsolate(isolate_);
+  if ((FLAG_wasm_disable_structured_cloning && !enabled_features.threads) ||
+      expect_inline_wasm()) {
     return MaybeHandle<JSObject>();
   }
 
@@ -1765,7 +1769,9 @@ MaybeHandle<JSObject> ValueDeserializer::ReadWasmModuleTransfer() {
 }
 
 MaybeHandle<JSObject> ValueDeserializer::ReadWasmModule() {
-  if (FLAG_wasm_disable_structured_cloning || !expect_inline_wasm()) {
+  auto enabled_features = wasm::WasmFeaturesFromIsolate(isolate_);
+  if ((FLAG_wasm_disable_structured_cloning && !enabled_features.threads) ||
+      !expect_inline_wasm()) {
     return MaybeHandle<JSObject>();
   }
 
@@ -2037,7 +2043,7 @@ void ValueDeserializer::AddObjectWithID(uint32_t id,
 
   // If the dictionary was reallocated, update the global handle.
   if (!new_array.is_identical_to(id_map_)) {
-    GlobalHandles::Destroy(Handle<Object>::cast(id_map_).location());
+    GlobalHandles::Destroy(id_map_.location());
     id_map_ = isolate_->global_handles()->Create(*new_array);
   }
 }

@@ -23,6 +23,7 @@
 #include "src/objects/js-promise-inl.h"
 #include "src/objects/js-regexp-inl.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/objects/slots-inl.h"
 #include "src/profiler/allocation-tracker.h"
 #include "src/profiler/heap-profiler.h"
 #include "src/profiler/heap-snapshot-generator-inl.h"
@@ -665,32 +666,34 @@ class IndexedReferencesExtractor : public ObjectVisitor {
                              HeapEntry* parent)
       : generator_(generator),
         parent_obj_(parent_obj),
-        parent_start_(HeapObject::RawField(parent_obj_, 0)),
-        parent_end_(HeapObject::RawField(parent_obj_, parent_obj_->Size())),
+        parent_start_(HeapObject::RawMaybeWeakField(parent_obj_, 0)),
+        parent_end_(
+            HeapObject::RawMaybeWeakField(parent_obj_, parent_obj_->Size())),
         parent_(parent) {}
-  void VisitPointers(HeapObject* host, Object** start, Object** end) override {
-    VisitPointers(host, reinterpret_cast<MaybeObject**>(start),
-                  reinterpret_cast<MaybeObject**>(end));
+  void VisitPointers(HeapObject* host, ObjectSlot start,
+                     ObjectSlot end) override {
+    VisitPointers(host, MaybeObjectSlot(start), MaybeObjectSlot(end));
   }
-  void VisitPointers(HeapObject* host, MaybeObject** start,
-                     MaybeObject** end) override {
+  void VisitPointers(HeapObject* host, MaybeObjectSlot start,
+                     MaybeObjectSlot end) override {
     int next_index = 0;
-    for (MaybeObject** p = start; p < end; p++) {
-      int index = static_cast<int>(reinterpret_cast<Object**>(p) -
-                                   HeapObject::RawField(parent_obj_, 0));
-      ++next_index;
+    for (MaybeObjectSlot p = start; p < end; ++p) {
+      int index = -1;
       // |p| could be outside of the object, e.g., while visiting RelocInfo of
       // code objects.
-      if (reinterpret_cast<Object**>(p) >= parent_start_ &&
-          reinterpret_cast<Object**>(p) < parent_end_ &&
-          generator_->visited_fields_[index]) {
-        generator_->visited_fields_[index] = false;
-        continue;
+      if (parent_start_ <= p && p < parent_end_) {
+        index = static_cast<int>(p - parent_start_);
+        if (generator_->visited_fields_[index]) {
+          generator_->visited_fields_[index] = false;
+          continue;
+        }
       }
       HeapObject* heap_object;
-      if ((*p)->GetHeapObjectIfWeak(&heap_object) ||
-          (*p)->GetHeapObjectIfStrong(&heap_object)) {
-        generator_->SetHiddenReference(parent_obj_, parent_, next_index,
+      if ((*p)->GetHeapObject(&heap_object)) {
+        // The last parameter {field_offset} is only used to check some
+        // well-known skipped references, so passing -1 * kPointerSize
+        // for out-of-object slots is fine.
+        generator_->SetHiddenReference(parent_obj_, parent_, next_index++,
                                        heap_object, index * kPointerSize);
       }
     }
@@ -699,8 +702,8 @@ class IndexedReferencesExtractor : public ObjectVisitor {
  private:
   V8HeapExplorer* generator_;
   HeapObject* parent_obj_;
-  Object** parent_start_;
-  Object** parent_end_;
+  MaybeObjectSlot parent_start_;
+  MaybeObjectSlot parent_end_;
   HeapEntry* parent_;
 };
 
@@ -916,7 +919,7 @@ static const struct {
 } native_context_names[] = {
 #define CONTEXT_FIELD_INDEX_NAME(index, _, name) {Context::index, #name},
     NATIVE_CONTEXT_FIELDS(CONTEXT_FIELD_INDEX_NAME)
-#undef CONTEXT_FIELD_INDEX
+#undef CONTEXT_FIELD_INDEX_NAME
 };
 
 void V8HeapExplorer::ExtractContextReferences(HeapEntry* entry,
@@ -980,7 +983,7 @@ void V8HeapExplorer::ExtractContextReferences(HeapEntry* entry,
 }
 
 void V8HeapExplorer::ExtractMapReferences(HeapEntry* entry, Map* map) {
-  MaybeObject* maybe_raw_transitions_or_prototype_info = map->raw_transitions();
+  MaybeObject maybe_raw_transitions_or_prototype_info = map->raw_transitions();
   HeapObject* raw_transitions_or_prototype_info;
   if (maybe_raw_transitions_or_prototype_info->GetHeapObjectIfWeak(
           &raw_transitions_or_prototype_info)) {
@@ -1229,7 +1232,7 @@ void V8HeapExplorer::ExtractFixedArrayReferences(HeapEntry* entry,
 
 void V8HeapExplorer::ExtractFeedbackVectorReferences(
     HeapEntry* entry, FeedbackVector* feedback_vector) {
-  MaybeObject* code = feedback_vector->optimized_code_weak_or_smi();
+  MaybeObject code = feedback_vector->optimized_code_weak_or_smi();
   HeapObject* code_heap_object;
   if (code->GetHeapObjectIfWeak(&code_heap_object)) {
     SetWeakReference(entry, "optimized code", code_heap_object,
@@ -1241,7 +1244,7 @@ template <typename T>
 void V8HeapExplorer::ExtractWeakArrayReferences(int header_size,
                                                 HeapEntry* entry, T* array) {
   for (int i = 0; i < array->length(); ++i) {
-    MaybeObject* object = array->Get(i);
+    MaybeObject object = array->Get(i);
     HeapObject* heap_object;
     if (object->GetHeapObjectIfWeak(&heap_object)) {
       SetWeakReference(entry, i, heap_object, header_size + i * kPointerSize);
@@ -1394,7 +1397,7 @@ class RootsReferencesExtractor : public RootVisitor {
   void SetVisitingWeakRoots() { visiting_weak_roots_ = true; }
 
   void VisitRootPointer(Root root, const char* description,
-                        Object** object) override {
+                        ObjectSlot object) override {
     if (root == Root::kBuiltins) {
       explorer_->TagBuiltinCodeObject(Code::cast(*object), description);
     }
@@ -1402,9 +1405,9 @@ class RootsReferencesExtractor : public RootVisitor {
                                      *object);
   }
 
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override {
-    for (Object** p = start; p < end; p++)
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override {
+    for (ObjectSlot p = start; p < end; ++p)
       VisitRootPointer(root, description, p);
   }
 
@@ -1427,7 +1430,8 @@ bool V8HeapExplorer::IterateAndExtractReferences(
   // first. Otherwise a particular JSFunction object could set
   // its custom name to a generic builtin.
   RootsReferencesExtractor extractor(this);
-  heap_->IterateRoots(&extractor, VISIT_ONLY_STRONG_FOR_SERIALIZATION);
+  ReadOnlyRoots(heap_).Iterate(&extractor);
+  heap_->IterateRoots(&extractor, VISIT_ONLY_STRONG);
   extractor.SetVisitingWeakRoots();
   heap_->IterateWeakGlobalHandles(&extractor);
 
@@ -1673,24 +1677,13 @@ void V8HeapExplorer::SetGcSubrootReference(Root root, const char* description,
   SetUserGlobalReference(global);
 }
 
-// This static array is used to prevent excessive code-size in
-// GetStrongGcSubrootName below, which would happen if we called emplace() for
-// every root in a macro.
-static const char* root_names[] = {
-#define ROOT_NAME(type, name, CamelName) #name,
-    READ_ONLY_ROOT_LIST(ROOT_NAME) MUTABLE_ROOT_LIST(ROOT_NAME)
-#undef ROOT_NAME
-};
-STATIC_ASSERT(static_cast<uint16_t>(RootIndex::kRootListLength) ==
-              arraysize(root_names));
-
 const char* V8HeapExplorer::GetStrongGcSubrootName(Object* object) {
   if (strong_gc_subroot_names_.empty()) {
-    for (uint16_t i = 0; i < static_cast<uint16_t>(RootIndex::kRootListLength);
-         i++) {
-      const char* name = root_names[i];
-      RootIndex index = static_cast<RootIndex>(i);
-      strong_gc_subroot_names_.emplace(heap_->root(index), name);
+    Isolate* isolate = heap_->isolate();
+    for (RootIndex root_index = RootIndex::kFirstStrongOrReadOnlyRoot;
+         root_index <= RootIndex::kLastStrongOrReadOnlyRoot; ++root_index) {
+      const char* name = RootsTable::name(root_index);
+      strong_gc_subroot_names_.emplace(isolate->root(root_index), name);
     }
     CHECK(!strong_gc_subroot_names_.empty());
   }
@@ -1709,9 +1702,9 @@ void V8HeapExplorer::TagObject(Object* obj, const char* tag) {
 
 class GlobalObjectsEnumerator : public RootVisitor {
  public:
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override {
-    for (Object** p = start; p < end; p++) {
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override {
+    for (ObjectSlot p = start; p < end; ++p) {
       if (!(*p)->IsNativeContext()) continue;
       JSObject* proxy = Context::cast(*p)->global_proxy();
       if (!proxy->IsJSGlobalProxy()) continue;
@@ -1811,7 +1804,9 @@ class GlobalHandlesExtractor : public PersistentHandleVisitor {
   void VisitPersistentHandle(Persistent<Value>* value,
                              uint16_t class_id) override {
     Handle<Object> object = Utils::OpenPersistent(value);
-    explorer_->VisitSubtreeWrapper(object.location(), class_id);
+    // TODO(3770): Get rid of Object** here.
+    explorer_->VisitSubtreeWrapper(
+        reinterpret_cast<Object**>(object.location()), class_id);
   }
 
  private:

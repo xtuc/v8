@@ -19,6 +19,7 @@
 #include "src/heap/heap-inl.h"
 #include "src/instruction-stream.h"
 #include "src/objects-inl.h"
+#include "src/objects/smi.h"
 #include "src/register-configuration.h"
 #include "src/snapshot/snapshot.h"
 #include "src/string-constants.h"
@@ -80,21 +81,11 @@ MacroAssembler::MacroAssembler(Isolate* isolate,
   }
 }
 
-static const int64_t kInvalidRootRegisterDelta = -1;
-
-int64_t TurboAssembler::RootRegisterDelta(ExternalReference other) {
-  if (predictable_code_size() &&
-      (other.address() < reinterpret_cast<Address>(isolate()) ||
-       other.address() >= reinterpret_cast<Address>(isolate() + 1))) {
-    return kInvalidRootRegisterDelta;
-  }
-  return RootRegisterOffsetForExternalReference(isolate(), other);
-}
 
 void MacroAssembler::Load(Register destination, ExternalReference source) {
   if (root_array_available_ && options().enable_root_array_delta_access) {
-    int64_t delta = RootRegisterDelta(source);
-    if (delta != kInvalidRootRegisterDelta && is_int32(delta)) {
+    intptr_t delta = RootRegisterOffsetForExternalReference(isolate(), source);
+    if (is_int32(delta)) {
       movp(destination, Operand(kRootRegister, static_cast<int32_t>(delta)));
       return;
     }
@@ -118,8 +109,9 @@ void MacroAssembler::Load(Register destination, ExternalReference source) {
 
 void MacroAssembler::Store(ExternalReference destination, Register source) {
   if (root_array_available_ && options().enable_root_array_delta_access) {
-    int64_t delta = RootRegisterDelta(destination);
-    if (delta != kInvalidRootRegisterDelta && is_int32(delta)) {
+    intptr_t delta =
+        RootRegisterOffsetForExternalReference(isolate(), destination);
+    if (is_int32(delta)) {
       movp(Operand(kRootRegister, static_cast<int32_t>(delta)), source);
       return;
     }
@@ -159,8 +151,8 @@ void TurboAssembler::LoadRootRelative(Register destination, int32_t offset) {
 void TurboAssembler::LoadAddress(Register destination,
                                  ExternalReference source) {
   if (root_array_available_ && options().enable_root_array_delta_access) {
-    int64_t delta = RootRegisterDelta(source);
-    if (delta != kInvalidRootRegisterDelta && is_int32(delta)) {
+    intptr_t delta = RootRegisterOffsetForExternalReference(isolate(), source);
+    if (is_int32(delta)) {
       leap(destination, Operand(kRootRegister, static_cast<int32_t>(delta)));
       return;
     }
@@ -175,15 +167,32 @@ void TurboAssembler::LoadAddress(Register destination,
   Move(destination, source);
 }
 
-Operand TurboAssembler::ExternalOperand(ExternalReference target,
-                                        Register scratch) {
+Operand TurboAssembler::ExternalReferenceAsOperand(ExternalReference reference,
+                                                   Register scratch) {
   if (root_array_available_ && options().enable_root_array_delta_access) {
-    int64_t delta = RootRegisterDelta(target);
-    if (delta != kInvalidRootRegisterDelta && is_int32(delta)) {
+    int64_t delta =
+        RootRegisterOffsetForExternalReference(isolate(), reference);
+    if (is_int32(delta)) {
       return Operand(kRootRegister, static_cast<int32_t>(delta));
     }
   }
-  Move(scratch, target);
+  if (root_array_available_ && options().isolate_independent_code) {
+    if (IsAddressableThroughRootRegister(isolate(), reference)) {
+      // Some external references can be efficiently loaded as an offset from
+      // kRootRegister.
+      intptr_t offset =
+          RootRegisterOffsetForExternalReference(isolate(), reference);
+      CHECK(is_int32(offset));
+      return Operand(kRootRegister, static_cast<int32_t>(offset));
+    } else {
+      // Otherwise, do a memory load from the external reference table.
+      movp(scratch, Operand(kRootRegister,
+                            RootRegisterOffsetForExternalReferenceTableEntry(
+                                isolate(), reference)));
+      return Operand(scratch, 0);
+    }
+  }
+  Move(scratch, reference);
   return Operand(scratch, 0);
 }
 
@@ -194,17 +203,18 @@ void MacroAssembler::PushAddress(ExternalReference source) {
 
 void TurboAssembler::LoadRoot(Register destination, RootIndex index) {
   DCHECK(root_array_available_);
-  movp(destination, Operand(kRootRegister, RootRegisterOffset(index)));
+  movp(destination,
+       Operand(kRootRegister, RootRegisterOffsetForRootIndex(index)));
 }
 
 void MacroAssembler::PushRoot(RootIndex index) {
   DCHECK(root_array_available_);
-  Push(Operand(kRootRegister, RootRegisterOffset(index)));
+  Push(Operand(kRootRegister, RootRegisterOffsetForRootIndex(index)));
 }
 
 void TurboAssembler::CompareRoot(Register with, RootIndex index) {
   DCHECK(root_array_available_);
-  cmpp(with, Operand(kRootRegister, RootRegisterOffset(index)));
+  cmpp(with, Operand(kRootRegister, RootRegisterOffsetForRootIndex(index)));
 }
 
 void TurboAssembler::CompareRoot(Operand with, RootIndex index) {
@@ -275,20 +285,39 @@ void TurboAssembler::RestoreRegisters(RegList registers) {
 void TurboAssembler::CallRecordWriteStub(
     Register object, Register address,
     RememberedSetAction remembered_set_action, SaveFPRegsMode fp_mode) {
-  Callable const callable =
-      Builtins::CallableFor(isolate(), Builtins::kRecordWrite);
-  RegList registers = callable.descriptor().allocatable_registers();
+  CallRecordWriteStub(
+      object, address, remembered_set_action, fp_mode,
+      isolate()->builtins()->builtin_handle(Builtins::kRecordWrite),
+      kNullAddress);
+}
+
+void TurboAssembler::CallRecordWriteStub(
+    Register object, Register address,
+    RememberedSetAction remembered_set_action, SaveFPRegsMode fp_mode,
+    Address wasm_target) {
+  CallRecordWriteStub(object, address, remembered_set_action, fp_mode,
+                      Handle<Code>::null(), wasm_target);
+}
+
+void TurboAssembler::CallRecordWriteStub(
+    Register object, Register address,
+    RememberedSetAction remembered_set_action, SaveFPRegsMode fp_mode,
+    Handle<Code> code_target, Address wasm_target) {
+  DCHECK_NE(code_target.is_null(), wasm_target == kNullAddress);
+
+  RecordWriteDescriptor descriptor;
+  RegList registers = descriptor.allocatable_registers();
 
   SaveRegisters(registers);
 
-  Register object_parameter(callable.descriptor().GetRegisterParameter(
-      RecordWriteDescriptor::kObject));
+  Register object_parameter(
+      descriptor.GetRegisterParameter(RecordWriteDescriptor::kObject));
   Register slot_parameter(
-      callable.descriptor().GetRegisterParameter(RecordWriteDescriptor::kSlot));
-  Register remembered_set_parameter(callable.descriptor().GetRegisterParameter(
-      RecordWriteDescriptor::kRememberedSet));
-  Register fp_mode_parameter(callable.descriptor().GetRegisterParameter(
-      RecordWriteDescriptor::kFPMode));
+      descriptor.GetRegisterParameter(RecordWriteDescriptor::kSlot));
+  Register remembered_set_parameter(
+      descriptor.GetRegisterParameter(RecordWriteDescriptor::kRememberedSet));
+  Register fp_mode_parameter(
+      descriptor.GetRegisterParameter(RecordWriteDescriptor::kFPMode));
 
   // Prepare argument registers for calling RecordWrite
   // slot_parameter   <= address
@@ -309,15 +338,20 @@ void TurboAssembler::CallRecordWriteStub(
     xchgq(slot_parameter, object_parameter);
   }
 
-  Smi* smi_rsa = Smi::FromEnum(remembered_set_action);
-  Smi* smi_fm = Smi::FromEnum(fp_mode);
+  Smi smi_rsa = Smi::FromEnum(remembered_set_action);
+  Smi smi_fm = Smi::FromEnum(fp_mode);
   Move(remembered_set_parameter, smi_rsa);
   if (smi_rsa != smi_fm) {
     Move(fp_mode_parameter, smi_fm);
   } else {
     movq(fp_mode_parameter, remembered_set_parameter);
   }
-  Call(callable.code(), RelocInfo::CODE_TARGET);
+  if (code_target.is_null()) {
+    // Use {near_call} for direct Wasm call within a module.
+    near_call(wasm_target, RelocInfo::WASM_STUB_CALL);
+  } else {
+    Call(code_target, RelocInfo::CODE_TARGET);
+  }
 
   RestoreRegisters(registers);
 }
@@ -993,7 +1027,7 @@ void TurboAssembler::Set(Operand dst, intptr_t x) {
 // ----------------------------------------------------------------------------
 // Smi tagging, untagging and tag detection.
 
-Register TurboAssembler::GetSmiConstant(Smi* source) {
+Register TurboAssembler::GetSmiConstant(Smi source) {
   STATIC_ASSERT(kSmiTag == 0);
   int value = source->value();
   if (value == 0) {
@@ -1004,13 +1038,13 @@ Register TurboAssembler::GetSmiConstant(Smi* source) {
   return kScratchRegister;
 }
 
-void TurboAssembler::Move(Register dst, Smi* source) {
+void TurboAssembler::Move(Register dst, Smi source) {
   STATIC_ASSERT(kSmiTag == 0);
   int value = source->value();
   if (value == 0) {
     xorl(dst, dst);
   } else {
-    Move(dst, reinterpret_cast<Address>(source), RelocInfo::NONE);
+    Move(dst, source.ptr(), RelocInfo::NONE);
   }
 }
 
@@ -1060,14 +1094,12 @@ void MacroAssembler::SmiCompare(Register smi1, Register smi2) {
   cmpp(smi1, smi2);
 }
 
-
-void MacroAssembler::SmiCompare(Register dst, Smi* src) {
+void MacroAssembler::SmiCompare(Register dst, Smi src) {
   AssertSmi(dst);
   Cmp(dst, src);
 }
 
-
-void MacroAssembler::Cmp(Register dst, Smi* src) {
+void MacroAssembler::Cmp(Register dst, Smi src) {
   DCHECK_NE(dst, kScratchRegister);
   if (src->value() == 0) {
     testp(dst, dst);
@@ -1089,7 +1121,7 @@ void MacroAssembler::SmiCompare(Operand dst, Register src) {
   cmpp(dst, src);
 }
 
-void MacroAssembler::SmiCompare(Operand dst, Smi* src) {
+void MacroAssembler::SmiCompare(Operand dst, Smi src) {
   AssertSmi(dst);
   if (SmiValuesAre32Bits()) {
     cmpl(Operand(dst, kSmiShift / kBitsPerByte), Immediate(src->value()));
@@ -1099,7 +1131,7 @@ void MacroAssembler::SmiCompare(Operand dst, Smi* src) {
   }
 }
 
-void MacroAssembler::Cmp(Operand dst, Smi* src) {
+void MacroAssembler::Cmp(Operand dst, Smi src) {
   // The Operand cannot use the smi register.
   Register smi_reg = GetSmiConstant(src);
   DCHECK(!dst.AddressUsesRegister(smi_reg));
@@ -1138,7 +1170,7 @@ void MacroAssembler::JumpIfNotSmi(Operand src, Label* on_not_smi,
   j(NegateCondition(smi), on_not_smi, near_jump);
 }
 
-void MacroAssembler::SmiAddConstant(Operand dst, Smi* constant) {
+void MacroAssembler::SmiAddConstant(Operand dst, Smi constant) {
   if (constant->value() != 0) {
     if (SmiValuesAre32Bits()) {
       addl(Operand(dst, kSmiShift / kBitsPerByte),
@@ -1195,8 +1227,8 @@ SmiIndex MacroAssembler::SmiToIndex(Register dst,
   }
 }
 
-void TurboAssembler::Push(Smi* source) {
-  intptr_t smi = reinterpret_cast<intptr_t>(source);
+void TurboAssembler::Push(Smi source) {
+  intptr_t smi = static_cast<intptr_t>(source.ptr());
   if (is_int32(smi)) {
     Push(Immediate(static_cast<int32_t>(smi)));
     return;
@@ -1278,23 +1310,23 @@ void TurboAssembler::Move(XMMRegister dst, uint64_t src) {
 // ----------------------------------------------------------------------------
 
 void MacroAssembler::Absps(XMMRegister dst) {
-  Andps(dst,
-        ExternalOperand(ExternalReference::address_of_float_abs_constant()));
+  Andps(dst, ExternalReferenceAsOperand(
+                 ExternalReference::address_of_float_abs_constant()));
 }
 
 void MacroAssembler::Negps(XMMRegister dst) {
-  Xorps(dst,
-        ExternalOperand(ExternalReference::address_of_float_neg_constant()));
+  Xorps(dst, ExternalReferenceAsOperand(
+                 ExternalReference::address_of_float_neg_constant()));
 }
 
 void MacroAssembler::Abspd(XMMRegister dst) {
-  Andps(dst,
-        ExternalOperand(ExternalReference::address_of_double_abs_constant()));
+  Andps(dst, ExternalReferenceAsOperand(
+                 ExternalReference::address_of_double_abs_constant()));
 }
 
 void MacroAssembler::Negpd(XMMRegister dst) {
-  Xorps(dst,
-        ExternalOperand(ExternalReference::address_of_double_neg_constant()));
+  Xorps(dst, ExternalReferenceAsOperand(
+                 ExternalReference::address_of_double_neg_constant()));
 }
 
 void MacroAssembler::Cmp(Register dst, Handle<Object> source) {
@@ -1472,41 +1504,41 @@ void TurboAssembler::Jump(Address destination, RelocInfo::Mode rmode) {
 
 void TurboAssembler::Jump(Handle<Code> code_object, RelocInfo::Mode rmode,
                           Condition cc) {
-// TODO(X64): Inline this
-if (FLAG_embedded_builtins) {
-  if (root_array_available_ && options().isolate_independent_code &&
-      !Builtins::IsIsolateIndependentBuiltin(*code_object)) {
-    // Calls to embedded targets are initially generated as standard
-    // pc-relative calls below. When creating the embedded blob, call offsets
-    // are patched up to point directly to the off-heap instruction start.
-    // Note: It is safe to dereference code_object above since code generation
-    // for builtins and code stubs happens on the main thread.
-    Label skip;
-    if (cc != always) {
-      if (cc == never) return;
-      j(NegateCondition(cc), &skip, Label::kNear);
-    }
-    IndirectLoadConstant(kScratchRegister, code_object);
-    leap(kScratchRegister, FieldOperand(kScratchRegister, Code::kHeaderSize));
-    jmp(kScratchRegister);
-    bind(&skip);
-    return;
-  } else if (options().inline_offheap_trampolines) {
-    int builtin_index = Builtins::kNoBuiltinId;
-    if (isolate()->builtins()->IsBuiltinHandle(code_object, &builtin_index) &&
-        Builtins::IsIsolateIndependent(builtin_index)) {
-      // Inline the trampoline.
-      RecordCommentForOffHeapTrampoline(builtin_index);
-      CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
-      EmbeddedData d = EmbeddedData::FromBlob();
-      Address entry = d.InstructionStartOfBuiltin(builtin_index);
-      Move(kScratchRegister, entry, RelocInfo::OFF_HEAP_TARGET);
+  // TODO(X64): Inline this
+  if (FLAG_embedded_builtins) {
+    if (root_array_available_ && options().isolate_independent_code &&
+        !Builtins::IsIsolateIndependentBuiltin(*code_object)) {
+      // Calls to embedded targets are initially generated as standard
+      // pc-relative calls below. When creating the embedded blob, call offsets
+      // are patched up to point directly to the off-heap instruction start.
+      // Note: It is safe to dereference code_object above since code generation
+      // for builtins and code stubs happens on the main thread.
+      Label skip;
+      if (cc != always) {
+        if (cc == never) return;
+        j(NegateCondition(cc), &skip, Label::kNear);
+      }
+      IndirectLoadConstant(kScratchRegister, code_object);
+      leap(kScratchRegister, FieldOperand(kScratchRegister, Code::kHeaderSize));
       jmp(kScratchRegister);
+      bind(&skip);
       return;
+    } else if (options().inline_offheap_trampolines) {
+      int builtin_index = Builtins::kNoBuiltinId;
+      if (isolate()->builtins()->IsBuiltinHandle(code_object, &builtin_index) &&
+          Builtins::IsIsolateIndependent(builtin_index)) {
+        // Inline the trampoline.
+        RecordCommentForOffHeapTrampoline(builtin_index);
+        CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
+        EmbeddedData d = EmbeddedData::FromBlob();
+        Address entry = d.InstructionStartOfBuiltin(builtin_index);
+        Move(kScratchRegister, entry, RelocInfo::OFF_HEAP_TARGET);
+        jmp(kScratchRegister);
+        return;
+      }
     }
   }
-}
-j(cc, code_object, rmode);
+  j(cc, code_object, rmode);
 }
 
 void MacroAssembler::JumpToInstructionStream(Address entry) {
@@ -1873,10 +1905,10 @@ void MacroAssembler::PushStackHandler() {
   // Link the current handler as the next handler.
   ExternalReference handler_address =
       ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate());
-  Push(ExternalOperand(handler_address));
+  Push(ExternalReferenceAsOperand(handler_address));
 
   // Set this new handler as the current one.
-  movp(ExternalOperand(handler_address), rsp);
+  movp(ExternalReferenceAsOperand(handler_address), rsp);
 }
 
 
@@ -1884,7 +1916,7 @@ void MacroAssembler::PopStackHandler() {
   STATIC_ASSERT(StackHandlerConstants::kNextOffset == 0);
   ExternalReference handler_address =
       ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate());
-  Pop(ExternalOperand(handler_address));
+  Pop(ExternalReferenceAsOperand(handler_address));
   addp(rsp, Immediate(StackHandlerConstants::kSize - kPointerSize));
 }
 
@@ -2006,6 +2038,10 @@ void MacroAssembler::AssertGeneratorObject(Register object) {
   CmpInstanceType(map, JS_GENERATOR_OBJECT_TYPE);
   j(equal, &do_check);
 
+  // Check if JSAsyncFunctionObject
+  CmpInstanceType(map, JS_ASYNC_FUNCTION_OBJECT_TYPE);
+  j(equal, &do_check);
+
   // Check if JSAsyncGeneratorObject
   CmpInstanceType(map, JS_ASYNC_GENERATOR_OBJECT_TYPE);
 
@@ -2028,17 +2064,17 @@ void MacroAssembler::AssertUndefinedOrAllocationSite(Register object) {
 }
 
 void MacroAssembler::LoadWeakValue(Register in_out, Label* target_if_cleared) {
-  cmpp(in_out, Immediate(kClearedWeakHeapObject));
+  cmpl(in_out, Immediate(kClearedWeakHeapObjectLower32));
   j(equal, target_if_cleared);
 
-  andp(in_out, Immediate(~kWeakHeapObjectMask));
+  andp(in_out, Immediate(~static_cast<int32_t>(kWeakHeapObjectMask)));
 }
 
 void MacroAssembler::IncrementCounter(StatsCounter* counter, int value) {
   DCHECK_GT(value, 0);
   if (FLAG_native_code_counters && counter->Enabled()) {
     Operand counter_operand =
-        ExternalOperand(ExternalReference::Create(counter));
+        ExternalReferenceAsOperand(ExternalReference::Create(counter));
     if (value == 1) {
       incl(counter_operand);
     } else {
@@ -2052,7 +2088,7 @@ void MacroAssembler::DecrementCounter(StatsCounter* counter, int value) {
   DCHECK_GT(value, 0);
   if (FLAG_native_code_counters && counter->Enabled()) {
     Operand counter_operand =
-        ExternalOperand(ExternalReference::Create(counter));
+        ExternalReferenceAsOperand(ExternalReference::Create(counter));
     if (value == 1) {
       decl(counter_operand);
     } else {
@@ -2267,7 +2303,8 @@ void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
   Label skip_hook;
   ExternalReference debug_hook_active =
       ExternalReference::debug_hook_on_function_call_address(isolate());
-  Operand debug_hook_active_operand = ExternalOperand(debug_hook_active);
+  Operand debug_hook_active_operand =
+      ExternalReferenceAsOperand(debug_hook_active);
   cmpb(debug_hook_active_operand, Immediate(0));
   j(equal, &skip_hook);
 
@@ -2333,23 +2370,6 @@ void TurboAssembler::LeaveFrame(StackFrame::Type type) {
   }
   movp(rsp, rbp);
   popq(rbp);
-}
-
-void MacroAssembler::EnterBuiltinFrame(Register context, Register target,
-                                       Register argc) {
-  Push(rbp);
-  Move(rbp, rsp);
-  Push(context);
-  Push(target);
-  Push(argc);
-}
-
-void MacroAssembler::LeaveBuiltinFrame(Register context, Register target,
-                                       Register argc) {
-  Pop(argc);
-  Pop(target);
-  Pop(context);
-  leave();
 }
 
 void MacroAssembler::EnterExitFramePrologue(bool save_rax,
@@ -2484,7 +2504,7 @@ void MacroAssembler::LeaveExitFrameEpilogue() {
   // Restore current context from top and clear it in debug mode.
   ExternalReference context_address =
       ExternalReference::Create(IsolateAddressId::kContextAddress, isolate());
-  Operand context_operand = ExternalOperand(context_address);
+  Operand context_operand = ExternalReferenceAsOperand(context_address);
   movp(rsi, context_operand);
 #ifdef DEBUG
   movp(context_operand, Immediate(Context::kInvalidContext));
@@ -2493,7 +2513,7 @@ void MacroAssembler::LeaveExitFrameEpilogue() {
   // Clear the top frame.
   ExternalReference c_entry_fp_address =
       ExternalReference::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  Operand c_entry_fp_operand = ExternalOperand(c_entry_fp_address);
+  Operand c_entry_fp_operand = ExternalReferenceAsOperand(c_entry_fp_address);
   movp(c_entry_fp_operand, Immediate(0));
 }
 

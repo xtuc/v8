@@ -7,25 +7,41 @@
 
 #ifdef V8_INTL_SUPPORT
 #define INTERNALIZED_STRING_LIST_GENERATOR_INTL(V, _)               \
+  V(_, breakType_string, "breakType")                               \
+  V(_, calendar_string, "calendar")                                 \
+  V(_, cardinal_string, "cardinal")                                 \
   V(_, caseFirst_string, "caseFirst")                               \
   V(_, day_string, "day")                                           \
   V(_, dayPeriod_string, "dayPeriod")                               \
   V(_, decimal_string, "decimal")                                   \
   V(_, era_string, "era")                                           \
   V(_, fraction_string, "fraction")                                 \
+  V(_, granularity_string, "granularity")                           \
+  V(_, grapheme_string, "grapheme")                                 \
   V(_, group_string, "group")                                       \
   V(_, h11_string, "h11")                                           \
   V(_, h12_string, "h12")                                           \
   V(_, h23_string, "h23")                                           \
   V(_, h24_string, "h24")                                           \
+  V(_, hard_string, "hard")                                         \
   V(_, hour_string, "hour")                                         \
+  V(_, hour12_string, "hour12")                                     \
+  V(_, hourCycle_string, "hourCycle")                               \
   V(_, collation_string, "collation")                               \
   V(_, currency_string, "currency")                                 \
   V(_, currencyDisplay_string, "currencyDisplay")                   \
+  V(_, ideo_string, "ideo")                                         \
   V(_, ignorePunctuation_string, "ignorePunctuation")               \
+  V(_, Invalid_Date_string, "Invalid Date")                         \
   V(_, integer_string, "integer")                                   \
+  V(_, kana_string, "kana")                                         \
+  V(_, letter_string, "letter")                                     \
+  V(_, lineBreakStyle_string, "lineBreakStyle")                     \
+  V(_, list_string, "list")                                         \
   V(_, literal_string, "literal")                                   \
   V(_, locale_string, "locale")                                     \
+  V(_, localeWithExtension_string, "localeWithExtension")           \
+  V(_, loose_string, "loose")                                       \
   V(_, lower_string, "lower")                                       \
   V(_, maximumFractionDigits_string, "maximumFractionDigits")       \
   V(_, maximumSignificantDigits_string, "maximumSignificantDigits") \
@@ -36,19 +52,31 @@
   V(_, minusSign_string, "minusSign")                               \
   V(_, minute_string, "minute")                                     \
   V(_, month_string, "month")                                       \
+  V(_, none_string, "none")                                         \
+  V(_, normal_string, "normal")                                     \
   V(_, numberingSystem_string, "numberingSystem")                   \
   V(_, numeric_string, "numeric")                                   \
+  V(_, ordinal_string, "ordinal")                                   \
   V(_, percentSign_string, "percentSign")                           \
   V(_, plusSign_string, "plusSign")                                 \
   V(_, quarter_string, "quarter")                                   \
   V(_, second_string, "second")                                     \
+  V(_, segment_string, "segment")                                   \
+  V(_, SegmentIterator_string, "Segment Iterator")                  \
   V(_, sensitivity_string, "sensitivity")                           \
+  V(_, sep_string, "sep")                                           \
+  V(_, soft_string, "soft")                                         \
+  V(_, strict_string, "strict")                                     \
   V(_, style_string, "style")                                       \
+  V(_, term_string, "term")                                         \
+  V(_, timeZone_string, "timeZone")                                 \
   V(_, timeZoneName_string, "timeZoneName")                         \
   V(_, type_string, "type")                                         \
+  V(_, unknown_string, "unknown")                                   \
   V(_, upper_string, "upper")                                       \
   V(_, usage_string, "usage")                                       \
   V(_, useGrouping_string, "useGrouping")                           \
+  V(_, UTC_string, "UTC")                                           \
   V(_, unit_string, "unit")                                         \
   V(_, weekday_string, "weekday")                                   \
   V(_, year_string, "year")
@@ -144,8 +172,6 @@
   V(_, getPrototypeOf_string, "getPrototypeOf")                       \
   V(_, global_string, "global")                                       \
   V(_, globalThis_string, "globalThis")                               \
-  V(_, granularity_string, "granularity")                             \
-  V(_, grapheme_string, "grapheme")                                   \
   V(_, groups_string, "groups")                                       \
   V(_, has_string, "has")                                             \
   V(_, ignoreCase_string, "ignoreCase")                               \
@@ -166,12 +192,9 @@
   V(_, lastIndex_string, "lastIndex")                                 \
   V(_, length_string, "length")                                       \
   V(_, let_string, "let")                                             \
-  V(_, lineBreakStyle_string, "lineBreakStyle")                       \
   V(_, line_string, "line")                                           \
   V(_, LinkError_string, "LinkError")                                 \
   V(_, long_string, "long")                                           \
-  V(_, loose_string, "loose")                                         \
-  V(_, makeCell_string, "makeCell")                                   \
   V(_, Map_string, "Map")                                             \
   V(_, MapIterator_string, "Map Iterator")                            \
   V(_, message_string, "message")                                     \
@@ -190,7 +213,6 @@
   V(_, NFKC_string, "NFKC")                                           \
   V(_, NFKD_string, "NFKD")                                           \
   V(_, not_equal, "not-equal")                                        \
-  V(_, normal_string, "normal")                                       \
   V(_, null_string, "null")                                           \
   V(_, null_to_string, "[object Null]")                               \
   V(_, Number_string, "Number")                                       \
@@ -217,6 +239,8 @@
   V(_, raw_string, "raw")                                             \
   V(_, ReconfigureToDataProperty_string, "ReconfigureToDataProperty") \
   V(_, ReferenceError_string, "ReferenceError")                       \
+  V(_, ReflectGet_string, "Reflect.get")                              \
+  V(_, ReflectHas_string, "Reflect.has")                              \
   V(_, RegExp_string, "RegExp")                                       \
   V(_, regexp_to_string, "[object RegExp]")                           \
   V(_, reject_string, "reject")                                       \
@@ -240,7 +264,6 @@
   V(_, stackTraceLimit_string, "stackTraceLimit")                     \
   V(_, star_default_star_string, "*default*")                         \
   V(_, sticky_string, "sticky")                                       \
-  V(_, strict_string, "strict")                                       \
   V(_, String_string, "String")                                       \
   V(_, string_string, "string")                                       \
   V(_, string_to_string, "[object String]")                           \
@@ -273,6 +296,7 @@
   V(_, WeakCell_string, "WeakCell")                                   \
   V(_, WeakFactory_string, "WeakFactory")                             \
   V(_, WeakMap_string, "WeakMap")                                     \
+  V(_, WeakRef_string, "WeakRef")                                     \
   V(_, WeakSet_string, "WeakSet")                                     \
   V(_, week_string, "week")                                           \
   V(_, will_handle_string, "willHandle")                              \
@@ -295,8 +319,6 @@
   V(_, frozen_symbol)                       \
   V(_, generic_symbol)                      \
   V(_, home_object_symbol)                  \
-  V(_, intl_initialized_marker_symbol)      \
-  V(_, intl_resolved_symbol)                \
   V(_, interpreter_trampoline_symbol)       \
   V(_, megamorphic_symbol)                  \
   V(_, native_context_index_symbol)         \
@@ -386,6 +408,7 @@
   F(MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAP_SPACE)     \
   F(MC_EVACUATE_UPDATE_POINTERS_TO_NEW_ROOTS)        \
   F(MC_EVACUATE_UPDATE_POINTERS_WEAK)                \
+  F(MC_FINISH_WRAPPER_EPILOGUE)                      \
   F(MC_MARK_FINISH_INCREMENTAL)                      \
   F(MC_MARK_MAIN)                                    \
   F(MC_MARK_ROOTS)                                   \
@@ -397,7 +420,6 @@
   F(MC_MARK_WEAK_CLOSURE_WEAK_ROOTS)                 \
   F(MC_MARK_WEAK_CLOSURE_HARMONY)                    \
   F(MC_MARK_WRAPPERS)                                \
-  F(MC_MARK_WRAPPER_EPILOGUE)                        \
   F(MC_MARK_WRAPPER_PROLOGUE)                        \
   F(MC_MARK_WRAPPER_TRACING)                         \
   F(MC_SWEEP_CODE)                                   \

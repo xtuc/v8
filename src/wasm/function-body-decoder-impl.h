@@ -647,7 +647,7 @@ struct ControlWithNamedConstructors : public ControlBase<Value> {
   F(StoreMem, StoreType type, const MemoryAccessImmediate<validate>& imm,     \
     const Value& index, const Value& value)                                   \
   F(CurrentMemoryPages, Value* result)                                        \
-  F(GrowMemory, const Value& value, Value* result)                            \
+  F(MemoryGrow, const Value& value, Value* result)                            \
   F(CallDirect, const CallFunctionImmediate<validate>& imm,                   \
     const Value args[], Value returns[])                                      \
   F(CallIndirect, const Value& index,                                         \
@@ -660,7 +660,7 @@ struct ControlWithNamedConstructors : public ControlBase<Value> {
     const Value& input, Value* result)                                        \
   F(Simd8x16ShuffleOp, const Simd8x16ShuffleImmediate<validate>& imm,         \
     const Value& input0, const Value& input1, Value* result)                  \
-  F(Throw, const ExceptionIndexImmediate<validate>& imm, Control* block,      \
+  F(Throw, const ExceptionIndexImmediate<validate>& imm,                      \
     const Vector<Value>& args)                                                \
   F(Rethrow, Control* block)                                                  \
   F(CatchException, const ExceptionIndexImmediate<validate>& imm,             \
@@ -798,7 +798,7 @@ class WasmDecoder : public Decoder {
           length = 1 + imm.length;
           break;
         }
-        case kExprGrowMemory:
+        case kExprMemoryGrow:
         case kExprCallFunction:
         case kExprCallIndirect:
           // Add instance cache nodes to the assigned set.
@@ -1009,6 +1009,7 @@ class WasmDecoder : public Decoder {
         MemoryAccessImmediate<validate> imm(decoder, pc, UINT32_MAX);
         return 1 + imm.length;
       }
+      case kExprRethrow:
       case kExprBr:
       case kExprBrIf: {
         BreakDepthImmediate<validate> imm(decoder, pc);
@@ -1065,7 +1066,7 @@ class WasmDecoder : public Decoder {
       case kExprRefNull: {
         return 1;
       }
-      case kExprGrowMemory:
+      case kExprMemoryGrow:
       case kExprMemorySize: {
         MemoryIndexImmediate<validate> imm(decoder, pc);
         return 1 + imm.length;
@@ -1142,7 +1143,7 @@ class WasmDecoder : public Decoder {
         return {2, 0};
       FOREACH_LOAD_MEM_OPCODE(DECLARE_OPCODE_CASE)
       case kExprTeeLocal:
-      case kExprGrowMemory:
+      case kExprMemoryGrow:
         return {1, 1};
       case kExprSetLocal:
       case kExprSetGlobal:
@@ -1471,9 +1472,17 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprRethrow: {
-            // TODO(kschimpf): Implement.
             CHECK_PROTOTYPE_OPCODE(eh);
-            OPCODE_ERROR(opcode, "not implemented yet");
+            BreakDepthImmediate<validate> imm(this, this->pc_);
+            if (!this->Validate(this->pc_, imm, control_.size())) break;
+            Control* c = control_at(imm.depth);
+            if (!VALIDATE(c->is_try_catchall() || c->is_try_catch())) {
+              this->error("rethrow not targeting catch or catch-all");
+              break;
+            }
+            CALL_INTERFACE_IF_REACHABLE(Rethrow, c);
+            len = 1 + imm.length;
+            EndControl();
             break;
           }
           case kExprThrow: {
@@ -1482,8 +1491,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             len = 1 + imm.length;
             if (!this->Validate(this->pc_, imm)) break;
             PopArgs(imm.exception->ToFunctionSig());
-            CALL_INTERFACE_IF_REACHABLE(Throw, imm, &control_.back(),
-                                        vec2vec(args_));
+            CALL_INTERFACE_IF_REACHABLE(Throw, imm, vec2vec(args_));
             EndControl();
             break;
           }
@@ -1526,8 +1534,8 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             }
             Vector<Value> values(stack_.data() + c->stack_depth,
                                  sig->parameter_count());
-            CALL_INTERFACE_IF_PARENT_REACHABLE(CatchException, imm, c, values);
             c->reachability = control_at(1)->innerReachability();
+            CALL_INTERFACE_IF_PARENT_REACHABLE(CatchException, imm, c, values);
             break;
           }
           case kExprCatchAll: {
@@ -1548,8 +1556,8 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             c->kind = kControlTryCatchAll;
             FallThruTo(c);
             stack_.resize(c->stack_depth);
-            CALL_INTERFACE_IF_PARENT_REACHABLE(CatchAll, c);
             c->reachability = control_at(1)->innerReachability();
+            CALL_INTERFACE_IF_PARENT_REACHABLE(CatchAll, c);
             break;
           }
           case kExprLoop: {
@@ -1618,8 +1626,10 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             if (c->is_try_catch()) {
               // Emulate catch-all + re-throw.
               FallThruTo(c);
+              c->reachability = control_at(1)->innerReachability();
               CALL_INTERFACE_IF_PARENT_REACHABLE(CatchAll, c);
-              CALL_INTERFACE_IF_PARENT_REACHABLE(Rethrow, c);
+              CALL_INTERFACE_IF_REACHABLE(Rethrow, c);
+              EndControl();
             }
 
             FallThruTo(c);
@@ -1890,7 +1900,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
           case kExprF64StoreMem:
             len = 1 + DecodeStoreMem(StoreType::kF64Store);
             break;
-          case kExprGrowMemory: {
+          case kExprMemoryGrow: {
             if (!CheckHasMemory()) break;
             MemoryIndexImmediate<validate> imm(this, this->pc_);
             len = 1 + imm.length;
@@ -1901,7 +1911,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             }
             auto value = Pop(0, kWasmI32);
             auto* result = Push(kWasmI32);
-            CALL_INTERFACE_IF_REACHABLE(GrowMemory, value, result);
+            CALL_INTERFACE_IF_REACHABLE(MemoryGrow, value, result);
             break;
           }
           case kExprMemorySize: {

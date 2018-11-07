@@ -74,7 +74,7 @@ namespace internal {
   V(ResumeGenerator)                  \
   V(FrameDropperTrampoline)           \
   V(RunMicrotasks)                    \
-  V(WasmGrowMemory)                   \
+  V(WasmMemoryGrow)                   \
   V(WasmThrow)                        \
   V(CloneObjectWithVector)            \
   V(WasmToJavaScriptTypeConversion)   \
@@ -671,7 +671,7 @@ class FastNewObjectDescriptor : public CallInterfaceDescriptor {
 
 class RecordWriteDescriptor final : public CallInterfaceDescriptor {
  public:
-  DEFINE_PARAMETERS(kObject, kSlot, kRememberedSet, kFPMode)
+  DEFINE_PARAMETERS_NO_CONTEXT(kObject, kSlot, kRememberedSet, kFPMode)
   DEFINE_PARAMETER_TYPES(MachineType::TaggedPointer(),  // kObject
                          MachineType::Pointer(),        // kSlot
                          MachineType::TaggedSigned(),   // kRememberedSet
@@ -1090,12 +1090,12 @@ class RunMicrotasksDescriptor final : public CallInterfaceDescriptor {
   DECLARE_DEFAULT_DESCRIPTOR(RunMicrotasksDescriptor, CallInterfaceDescriptor)
 };
 
-class WasmGrowMemoryDescriptor final : public CallInterfaceDescriptor {
+class WasmMemoryGrowDescriptor final : public CallInterfaceDescriptor {
  public:
   DEFINE_PARAMETERS_NO_CONTEXT(kNumPages)
   DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::Int32(),  // result 1
                                     MachineType::Int32())  // kNumPages
-  DECLARE_DESCRIPTOR(WasmGrowMemoryDescriptor, CallInterfaceDescriptor)
+  DECLARE_DESCRIPTOR(WasmMemoryGrowDescriptor, CallInterfaceDescriptor)
 };
 
 class WasmThrowDescriptor final : public CallInterfaceDescriptor {

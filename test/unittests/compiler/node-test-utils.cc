@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "src/assembler.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/node-properties.h"
@@ -2152,6 +2151,7 @@ IS_BINOP_MATCHER(Word64Equal)
 IS_BINOP_MATCHER(Int32AddWithOverflow)
 IS_BINOP_MATCHER(Int32SubWithOverflow)
 IS_BINOP_MATCHER(Int32Add)
+IS_BINOP_MATCHER(Int32Div)
 IS_BINOP_MATCHER(Int32Sub)
 IS_BINOP_MATCHER(Int32Mul)
 IS_BINOP_MATCHER(Int32MulHigh)
@@ -2159,6 +2159,7 @@ IS_BINOP_MATCHER(Int32LessThan)
 IS_BINOP_MATCHER(Uint32LessThan)
 IS_BINOP_MATCHER(Uint32LessThanOrEqual)
 IS_BINOP_MATCHER(Int64Add)
+IS_BINOP_MATCHER(Int64Div)
 IS_BINOP_MATCHER(Int64Sub)
 IS_BINOP_MATCHER(Int64Mul)
 IS_BINOP_MATCHER(JSAdd)

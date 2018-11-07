@@ -282,6 +282,21 @@ bool InstructionSelector::CanCover(Node* user, Node* node) const {
   return true;
 }
 
+bool InstructionSelector::CanCoverTransitively(Node* user, Node* node,
+                                               Node* node_input) const {
+  if (CanCover(user, node) && CanCover(node, node_input)) {
+    // If {node} is pure, transitivity might not hold.
+    if (node->op()->HasProperty(Operator::kPure)) {
+      // If {node_input} is pure, the effect levels do not matter.
+      if (node_input->op()->HasProperty(Operator::kPure)) return true;
+      // Otherwise, {user} and {node_input} must have the same effect level.
+      return GetEffectLevel(user) == GetEffectLevel(node_input);
+    }
+    return true;
+  }
+  return false;
+}
+
 bool InstructionSelector::IsOnlyUserOfNodeInSameBlock(Node* user,
                                                       Node* node) const {
   BasicBlock* bb_user = schedule()->block(user);
@@ -472,7 +487,7 @@ InstructionOperand OperandForDeopt(Isolate* isolate, OperandGenerator* g,
 
       Handle<HeapObject> constant = HeapConstantOf(input->op());
       RootIndex root_index;
-      if (isolate->heap()->IsRootHandle(constant, &root_index) &&
+      if (isolate->roots_table().IsRootHandle(constant, &root_index) &&
           root_index == RootIndex::kOptimizedOut) {
         // For an optimized-out object we return an invalid instruction
         // operand, so that we take the fast path for optimized-out values.
@@ -886,6 +901,7 @@ void InstructionSelector::InitializeCallBuffer(Node* call, CallBuffer* buffer,
   bool call_code_immediate = (flags & kCallCodeImmediate) != 0;
   bool call_address_immediate = (flags & kCallAddressImmediate) != 0;
   bool call_use_fixed_target_reg = (flags & kCallFixedTargetRegister) != 0;
+  bool call_through_slot = (flags & kAllowCallThroughSlot) != 0;
   switch (buffer->descriptor->kind()) {
     case CallDescriptor::kCallCodeObject:
       // TODO(jgruber, v8:7449): The below is a hack to support tail-calls from
@@ -899,7 +915,8 @@ void InstructionSelector::InitializeCallBuffer(Node* call, CallBuffer* buffer,
               : call_use_fixed_target_reg
                     ? g.UseFixed(callee, kJavaScriptCallCodeStartRegister)
                     : is_tail_call ? g.UseUniqueRegister(callee)
-                                   : g.UseRegister(callee));
+                                   : call_through_slot ? g.UseUniqueSlot(callee)
+                                                       : g.UseRegister(callee));
       break;
     case CallDescriptor::kCallAddress:
       buffer->instruction_args.push_back(
@@ -1013,7 +1030,7 @@ void InstructionSelector::InitializeCallBuffer(Node* call, CallBuffer* buffer,
       if (poisoning_level_ != PoisoningMitigationLevel::kDontPoison &&
           unallocated.HasFixedRegisterPolicy()) {
         int reg = unallocated.fixed_register_index();
-        if (reg == kSpeculationPoisonRegister.code()) {
+        if (Register::from_code(reg) == kSpeculationPoisonRegister) {
           buffer->instruction_args[poison_alias_index] = g.TempImmediate(
               static_cast<int32_t>(buffer->instruction_args.size()));
           op = g.UseRegisterOrSlotOrConstant(*iter);
@@ -1491,6 +1508,8 @@ void InstructionSelector::VisitNode(Node* node) {
       } else {
         return EmitIdentity(node);
       }
+    case IrOpcode::kTruncateFloat64ToInt64:
+      return MarkAsWord64(node), VisitTruncateFloat64ToInt64(node);
     case IrOpcode::kTruncateFloat64ToUint32:
       return MarkAsWord32(node), VisitTruncateFloat64ToUint32(node);
     case IrOpcode::kTruncateFloat32ToInt32:
@@ -2309,6 +2328,10 @@ void InstructionSelector::VisitChangeFloat64ToUint64(Node* node) {
   UNIMPLEMENTED();
 }
 
+void InstructionSelector::VisitTruncateFloat64ToInt64(Node* node) {
+  UNIMPLEMENTED();
+}
+
 void InstructionSelector::VisitTryTruncateFloat32ToInt64(Node* node) {
   UNIMPLEMENTED();
 }
@@ -2577,6 +2600,7 @@ void InstructionSelector::VisitCall(Node* node, BasicBlock* handler) {
   }
 
   CallBuffer buffer(zone(), call_descriptor, frame_state_descriptor);
+  CallDescriptor::Flags flags = call_descriptor->flags();
 
   // Compute InstructionOperands for inputs and outputs.
   // TODO(turbofan): on some architectures it's probably better to use
@@ -2584,12 +2608,20 @@ void InstructionSelector::VisitCall(Node* node, BasicBlock* handler) {
   // Improve constant pool and the heuristics in the register allocator
   // for where to emit constants.
   CallBufferFlags call_buffer_flags(kCallCodeImmediate | kCallAddressImmediate);
+  if (flags & CallDescriptor::kAllowCallThroughSlot) {
+    // TODO(v8:6666): Remove kAllowCallThroughSlot and use a pc-relative call
+    // instead once builtins are embedded in every build configuration.
+    call_buffer_flags |= kAllowCallThroughSlot;
+#ifndef V8_TARGET_ARCH_32_BIT
+    // kAllowCallThroughSlot is only supported on ia32.
+    UNREACHABLE();
+#endif
+  }
   InitializeCallBuffer(node, &buffer, call_buffer_flags, false);
 
   EmitPrepareArguments(&(buffer.pushed_nodes), call_descriptor, node);
 
   // Pass label of exception handler block.
-  CallDescriptor::Flags flags = call_descriptor->flags();
   if (handler) {
     DCHECK_EQ(IrOpcode::kIfException, handler->front()->opcode());
     flags |= CallDescriptor::kHasExceptionHandler;
@@ -2657,6 +2689,7 @@ void InstructionSelector::VisitTailCall(Node* node) {
   if (callee->flags() & CallDescriptor::kFixedTargetRegister) {
     flags |= kCallFixedTargetRegister;
   }
+  DCHECK_EQ(callee->flags() & CallDescriptor::kAllowCallThroughSlot, 0);
   InitializeCallBuffer(node, &buffer, flags, true, stack_param_delta);
 
   // Select the appropriate opcode based on the call type.

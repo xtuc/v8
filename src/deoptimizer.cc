@@ -16,6 +16,7 @@
 #include "src/interpreter/interpreter.h"
 #include "src/macro-assembler.h"
 #include "src/objects/debug-objects-inl.h"
+#include "src/objects/smi.h"
 #include "src/tracing/trace-event.h"
 #include "src/v8.h"
 
@@ -136,8 +137,8 @@ DeoptimizerData::DeoptimizerData(Heap* heap) : heap_(heap), current_(nullptr) {
   }
   Code** start = &deopt_entry_code_[0];
   Code** end = &deopt_entry_code_[DeoptimizerData::kLastDeoptimizeKind + 1];
-  heap_->RegisterStrongRoots(reinterpret_cast<Object**>(start),
-                             reinterpret_cast<Object**>(end));
+  heap_->RegisterStrongRoots(ObjectSlot(reinterpret_cast<Address>(start)),
+                             ObjectSlot(reinterpret_cast<Address>(end)));
 }
 
 
@@ -146,7 +147,7 @@ DeoptimizerData::~DeoptimizerData() {
     deopt_entry_code_[i] = nullptr;
   }
   Code** start = &deopt_entry_code_[0];
-  heap_->UnregisterStrongRoots(reinterpret_cast<Object**>(start));
+  heap_->UnregisterStrongRoots(ObjectSlot(reinterpret_cast<Address>(start)));
 }
 
 Code* DeoptimizerData::deopt_entry_code(DeoptimizeKind kind) {
@@ -809,6 +810,10 @@ void Deoptimizer::DoComputeOutputFrames() {
     }
   }
 
+  FrameDescription* topmost = output_[count - 1];
+  topmost->GetRegisterValues()->SetRegister(kRootRegister.code(),
+                                            isolate()->isolate_root());
+
   // Print some helpful diagnostic information.
   if (trace_scope_ != nullptr) {
     double ms = timer.Elapsed().InMillisecondsF();
@@ -971,7 +976,7 @@ void Deoptimizer::DoComputeInterpretedFrame(TranslatedFrame* translated_frame,
   // The bytecode offset was mentioned explicitly in the BEGIN_FRAME.
   int raw_bytecode_offset =
       BytecodeArray::kHeaderSize - kHeapObjectTag + bytecode_offset;
-  Smi* smi_bytecode_offset = Smi::FromInt(raw_bytecode_offset);
+  Smi smi_bytecode_offset = Smi::FromInt(raw_bytecode_offset);
   frame_writer.PushRawObject(smi_bytecode_offset, "bytecode offset\n");
 
   if (trace_scope_ != nullptr) {
@@ -1048,7 +1053,7 @@ void Deoptimizer::DoComputeInterpretedFrame(TranslatedFrame* translated_frame,
   // and will be materialized by {Runtime_NotifyDeoptimized}. For additional
   // safety we use Smi(0) instead of the potential {arguments_marker} here.
   if (is_topmost) {
-    intptr_t context_value = reinterpret_cast<intptr_t>(Smi::kZero);
+    intptr_t context_value = static_cast<intptr_t>(Smi::zero().ptr());
     Register context_reg = JavaScriptFrame::context_register();
     output_frame->SetRegister(context_reg.code(), context_value);
     // Set the continuation for the topmost frame.
@@ -1173,7 +1178,8 @@ void Deoptimizer::DoComputeConstructStubFrame(TranslatedFrame* translated_frame,
   Code* construct_stub = builtins->builtin(Builtins::kJSConstructStubGeneric);
   BailoutId bailout_id = translated_frame->node_id();
   unsigned height = translated_frame->height();
-  unsigned height_in_bytes = height * kPointerSize;
+  unsigned parameter_count = height - 1;  // Exclude the context.
+  unsigned height_in_bytes = parameter_count * kPointerSize;
 
   // If the construct frame appears to be topmost we should ensure that the
   // value of result register is preserved during continuation execution.
@@ -1185,7 +1191,6 @@ void Deoptimizer::DoComputeConstructStubFrame(TranslatedFrame* translated_frame,
     if (PadTopOfStackRegister()) height_in_bytes += kPointerSize;
   }
 
-  int parameter_count = height;
   if (ShouldPadArguments(parameter_count)) height_in_bytes += kPointerSize;
 
   TranslatedFrame::iterator function_iterator = value_iterator++;
@@ -1227,7 +1232,7 @@ void Deoptimizer::DoComputeConstructStubFrame(TranslatedFrame* translated_frame,
   TranslatedFrame::iterator receiver_iterator = value_iterator;
 
   // Compute the incoming parameter translation.
-  for (int i = 0; i < parameter_count; ++i, ++value_iterator) {
+  for (unsigned i = 0; i < parameter_count; ++i, ++value_iterator) {
     frame_writer.PushTranslatedValue(value_iterator, "stack parameter");
   }
 
@@ -1259,13 +1264,10 @@ void Deoptimizer::DoComputeConstructStubFrame(TranslatedFrame* translated_frame,
   intptr_t marker = StackFrame::TypeToMarker(StackFrame::CONSTRUCT);
   frame_writer.PushRawValue(marker, "context (construct stub sentinel)\n");
 
-  // The context can be gotten from the previous frame.
-  Object* context =
-      reinterpret_cast<Object*>(output_[frame_index - 1]->GetContext());
-  frame_writer.PushRawObject(context, "context\n");
+  frame_writer.PushTranslatedValue(value_iterator++, "context\n");
 
   // Number of incoming arguments.
-  frame_writer.PushRawObject(Smi::FromInt(height - 1), "argc\n");
+  frame_writer.PushRawObject(Smi::FromInt(parameter_count - 1), "argc\n");
 
   // The constructor function was mentioned explicitly in the
   // CONSTRUCT_STUB_FRAME.
@@ -1323,7 +1325,7 @@ void Deoptimizer::DoComputeConstructStubFrame(TranslatedFrame* translated_frame,
   // and will be materialized by {Runtime_NotifyDeoptimized}. For additional
   // safety we use Smi(0) instead of the potential {arguments_marker} here.
   if (is_topmost) {
-    intptr_t context_value = reinterpret_cast<intptr_t>(Smi::kZero);
+    intptr_t context_value = static_cast<intptr_t>(Smi::zero().ptr());
     Register context_reg = JavaScriptFrame::context_register();
     output_frame->SetRegister(context_reg.code(), context_value);
   }
@@ -1464,7 +1466,6 @@ void Deoptimizer::DoComputeBuiltinContinuation(
 
   BailoutId bailout_id = translated_frame->node_id();
   Builtins::Name builtin_name = Builtins::GetBuiltinFromBailoutId(bailout_id);
-  CHECK(!Builtins::IsLazy(builtin_name));
   Code* builtin = isolate()->builtins()->builtin(builtin_name);
   Callable continuation_callable =
       Builtins::CallableFor(isolate(), builtin_name);
@@ -1476,13 +1477,7 @@ void Deoptimizer::DoComputeBuiltinContinuation(
   const bool must_handle_result =
       !is_topmost || deopt_kind_ == DeoptimizeKind::kLazy;
 
-#if defined(V8_TARGET_ARCH_IA32) && defined(V8_EMBEDDED_BUILTINS)
-  // TODO(v8:6666): Fold into Default config once root is fully supported.
-  const RegisterConfiguration* config(
-      RegisterConfiguration::PreserveRootIA32());
-#else
   const RegisterConfiguration* config(RegisterConfiguration::Default());
-#endif
   const int allocatable_register_count =
       config->num_allocatable_general_registers();
   const int padding_slot_count =
@@ -1720,7 +1715,7 @@ void Deoptimizer::DoComputeBuiltinContinuation(
   // and will be materialized by {Runtime_NotifyDeoptimized}. For additional
   // safety we use Smi(0) instead of the potential {arguments_marker} here.
   if (is_topmost) {
-    intptr_t context_value = reinterpret_cast<intptr_t>(Smi::kZero);
+    intptr_t context_value = static_cast<intptr_t>(Smi::zero().ptr());
     Register context_reg = JavaScriptFrame::context_register();
     output_frame->SetRegister(context_reg.code(), context_value);
   }
@@ -1868,7 +1863,15 @@ FrameDescription::FrameDescription(uint32_t frame_size, int parameter_count)
     // TODO(jbramley): It isn't safe to use kZapUint32 here. If the register
     // isn't used before the next safepoint, the GC will try to scan it as a
     // tagged value. kZapUint32 looks like a valid tagged pointer, but it isn't.
+#if defined(V8_OS_WIN) && defined(V8_TARGET_ARCH_ARM64)
+    // x18 is reserved as platform register on Windows arm64 platform
+    const int kPlatformRegister = 18;
+    if (r != kPlatformRegister) {
+      SetRegister(r, kZapUint32);
+    }
+#else
     SetRegister(r, kZapUint32);
+#endif
   }
 
   // Zap all the slots.

@@ -16,13 +16,14 @@
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/objects/shared-function-info.h"
+#include "src/objects/smi.h"
 
 namespace v8 {
 namespace internal {
 
 // Forward declarations for C++ builtins.
 #define FORWARD_DECLARE(Name) \
-  Object* Builtin_##Name(int argc, Object** args, Isolate* isolate);
+  Object* Builtin_##Name(int argc, Address* args, Isolate* isolate);
 BUILTIN_LIST_C(FORWARD_DECLARE)
 #undef FORWARD_DECLARE
 
@@ -75,7 +76,7 @@ Handle<Code> BuildPlaceholder(Isolate* isolate, int32_t builtin_index) {
     FrameScope scope(&masm, StackFrame::NONE);
     // The contents of placeholder don't matter, as long as they don't create
     // embedded constants or external references.
-    masm.Move(kJavaScriptCallCodeStartRegister, Smi::kZero);
+    masm.Move(kJavaScriptCallCodeStartRegister, Smi::zero());
     masm.Call(kJavaScriptCallCodeStartRegister);
   }
   CodeDesc desc;
@@ -267,18 +268,6 @@ Code* GenerateBytecodeHandler(Isolate* isolate, int builtin_index,
   return *code;
 }
 
-Code* GenerateLazyBytecodeHandler(Isolate* isolate, int builtin_index,
-                                  const char* name,
-                                  interpreter::OperandScale operand_scale) {
-  Handle<Code> code = interpreter::GenerateDeserializeLazyHandler(
-      isolate, operand_scale, builtin_index,
-      BuiltinAssemblerOptions(isolate, builtin_index));
-
-  PostBuildProfileAndTracing(isolate, *code, name);
-
-  return *code;
-}
-
 }  // namespace
 
 // static
@@ -328,18 +317,13 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
                                  OperandScale, Bytecode);               \
   AddBuiltin(builtins, index++, code);
 
-#define BUILD_DLH(Name, OperandScale)                                       \
-  code = GenerateLazyBytecodeHandler(isolate, index, Builtins::name(index), \
-                                     OperandScale);                         \
-  AddBuiltin(builtins, index++, code);
-
 #define BUILD_ASM(Name)                                                     \
   code = BuildWithMacroAssembler(isolate, index, Builtins::Generate_##Name, \
                                  #Name);                                    \
   AddBuiltin(builtins, index++, code);
 
   BUILTIN_LIST(BUILD_CPP, BUILD_API, BUILD_TFJ, BUILD_TFC, BUILD_TFS, BUILD_TFH,
-               BUILD_BCH, BUILD_DLH, BUILD_ASM);
+               BUILD_BCH, BUILD_ASM);
 
 #undef BUILD_CPP
 #undef BUILD_API
@@ -348,7 +332,6 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
 #undef BUILD_TFS
 #undef BUILD_TFH
 #undef BUILD_BCH
-#undef BUILD_DLH
 #undef BUILD_ASM
   CHECK_EQ(Builtins::builtin_count, index);
 

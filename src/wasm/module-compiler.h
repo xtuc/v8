@@ -11,6 +11,7 @@
 
 #include "src/cancelable-task.h"
 #include "src/globals.h"
+#include "src/wasm/compilation-environment.h"
 #include "src/wasm/wasm-features.h"
 #include "src/wasm/wasm-module.h"
 
@@ -28,25 +29,13 @@ class Vector;
 
 namespace wasm {
 
+struct CompilationEnv;
 class CompilationResultResolver;
-class CompilationState;
 class ErrorThrower;
 class ModuleCompiler;
 class NativeModule;
 class WasmCode;
-struct ModuleEnv;
 struct WasmModule;
-
-struct CompilationStateDeleter {
-  void operator()(CompilationState* compilation_state) const;
-};
-
-// Wrapper to create a CompilationState exists in order to avoid having
-// the CompilationState in the header file.
-std::unique_ptr<CompilationState, CompilationStateDeleter> NewCompilationState(
-    Isolate* isolate, const ModuleEnv& env);
-
-ModuleEnv* GetModuleEnv(CompilationState* compilation_state);
 
 MaybeHandle<WasmModuleObject> CompileToModuleObject(
     Isolate* isolate, const WasmFeatures& enabled, ErrorThrower* thrower,
@@ -106,12 +95,18 @@ class AsyncCompileJob {
   class CompileWrappers;         // Step 5  (sync)
   class FinishModule;            // Step 6  (sync)
 
-  const std::shared_ptr<Counters>& async_counters() const {
-    return async_counters_;
-  }
-  Counters* counters() const { return async_counters().get(); }
+  friend class AsyncStreamingProcessor;
 
-  void FinishCompile();
+  // Decrements the number of outstanding finishers. The last caller of this
+  // function should finish the asynchronous compilation, see the comment on
+  // {outstanding_finishers_}.
+  V8_WARN_UNUSED_RESULT bool DecrementAndCheckFinisherCount() {
+    return outstanding_finishers_.fetch_sub(1) == 1;
+  }
+
+  void PrepareRuntimeObjects(std::shared_ptr<const WasmModule>);
+
+  void FinishCompile(bool compile_wrappers);
 
   void AsyncCompileFailed(Handle<Object> error_reason);
 
@@ -127,6 +122,10 @@ class AsyncCompileJob {
   template <typename Step, typename... Args>
   void DoSync(Args&&... args);
 
+  // Switches to the compilation step {Step} and immediately executes that step.
+  template <typename Step, typename... Args>
+  void DoImmediately(Args&&... args);
+
   // Switches to the compilation step {Step} and starts a background task to
   // execute it.
   template <typename Step, typename... Args>
@@ -137,11 +136,8 @@ class AsyncCompileJob {
   template <typename Step, typename... Args>
   void NextStep(Args&&... args);
 
-  friend class AsyncStreamingProcessor;
-
-  Isolate* isolate_;
+  Isolate* const isolate_;
   const WasmFeatures enabled_features_;
-  const std::shared_ptr<Counters> async_counters_;
   // Copy of the module wire bytes, moved into the {native_module_} on its
   // creation.
   std::unique_ptr<byte[]> bytes_copy_;
@@ -149,7 +145,7 @@ class AsyncCompileJob {
   // {native_module_}).
   ModuleWireBytes wire_bytes_;
   Handle<Context> native_context_;
-  std::shared_ptr<CompilationResultResolver> resolver_;
+  const std::shared_ptr<CompilationResultResolver> resolver_;
 
   std::vector<DeferredHandles*> deferred_handles_;
   Handle<WasmModuleObject> module_object_;
@@ -165,13 +161,6 @@ class AsyncCompileJob {
   // compilation can be finished.
   std::atomic<int32_t> outstanding_finishers_{1};
 
-  // Decrements the number of outstanding finishers. The last caller of this
-  // function should finish the asynchronous compilation, see the comment on
-  // {outstanding_finishers_}.
-  V8_WARN_UNUSED_RESULT bool DecrementAndCheckFinisherCount() {
-    return outstanding_finishers_.fetch_sub(1) == 1;
-  }
-
   // A reference to a pending foreground task, or {nullptr} if none is pending.
   CompileTask* pending_foreground_task_ = nullptr;
 
@@ -180,9 +169,8 @@ class AsyncCompileJob {
   // compilation. The AsyncCompileJob does not actively use the
   // StreamingDecoder.
   std::shared_ptr<StreamingDecoder> stream_;
-
-  bool tiering_completed_ = false;
 };
+
 }  // namespace wasm
 }  // namespace internal
 }  // namespace v8

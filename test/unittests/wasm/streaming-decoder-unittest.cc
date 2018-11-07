@@ -42,8 +42,8 @@ class MockStreamingProcessor : public StreamingProcessor {
     return true;
   }
 
-  bool ProcessCodeSectionHeader(size_t num_functions,
-                                uint32_t offset) override {
+  bool ProcessCodeSectionHeader(size_t num_functions, uint32_t offset,
+                                std::shared_ptr<WireBytesStorage>) override {
     return true;
   }
 
@@ -65,6 +65,11 @@ class MockStreamingProcessor : public StreamingProcessor {
   void OnError(DecodeResult result) override { ok_ = false; }
 
   void OnAbort() override {}
+
+  bool Deserialize(Vector<const uint8_t> module_bytes,
+                   Vector<const uint8_t> wire_bytes) override {
+    return false;
+  };
 
   size_t num_sections() const { return num_sections_; }
   size_t num_functions() const { return num_functions_; }

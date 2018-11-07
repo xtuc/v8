@@ -7,6 +7,7 @@
 
 #include "src/base/bits.h"
 #include "src/objects/name.h"
+#include "src/objects/smi.h"
 #include "src/unicode-decoder.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -821,7 +822,7 @@ class FlatStringReader : public Relocatable {
   int length() { return length_; }
 
  private:
-  String** str_;
+  Address* str_;
   bool is_one_byte_;
   int length_;
   const void* start_;

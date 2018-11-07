@@ -51,6 +51,9 @@
 #include <vector>
 
 #include "src/assembler.h"
+#include "src/external-reference.h"
+#include "src/label.h"
+#include "src/objects/smi.h"
 #include "src/s390/constants-s390.h"
 
 #define ABI_USES_FUNCTION_DESCRIPTORS 0
@@ -360,8 +363,8 @@ class Operand {
     value_.immediate = static_cast<intptr_t>(f.address());
   }
   explicit Operand(Handle<HeapObject> handle);
-  V8_INLINE explicit Operand(Smi* value) : rmode_(RelocInfo::NONE) {
-    value_.immediate = reinterpret_cast<intptr_t>(value);
+  V8_INLINE explicit Operand(Smi value) : rmode_(RelocInfo::NONE) {
+    value_.immediate = static_cast<intptr_t>(value.ptr());
   }
 
   // rm
@@ -1503,13 +1506,6 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
   void dd(uint32_t data);
   void dq(uint64_t data);
   void dp(uintptr_t data);
-
-  void PatchConstantPoolAccessInstruction(int pc_offset, int offset,
-                                          ConstantPoolEntry::Access access,
-                                          ConstantPoolEntry::Type type) {
-    // No embedded constant pool support.
-    UNREACHABLE();
-  }
 
   // Read/patch instructions
   SixByteInstr instr_at(int pos) {

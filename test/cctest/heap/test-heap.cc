@@ -50,6 +50,7 @@
 #include "src/objects/js-array-inl.h"
 #include "src/objects/js-collection-inl.h"
 #include "src/objects/managed.h"
+#include "src/objects/slots.h"
 #include "src/regexp/jsregexp.h"
 #include "src/snapshot/snapshot.h"
 #include "src/transitions.h"
@@ -1692,7 +1693,7 @@ TEST(TestAlignedAllocation) {
     // aligned address.
     start = AlignNewSpace(kDoubleAligned, 0);
     obj = NewSpaceAllocateAligned(kPointerSize, kDoubleAligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment));
+    CHECK(IsAligned(obj->address(), kDoubleAlignment));
     // There is no filler.
     CHECK_EQ(kPointerSize, *top_addr - start);
 
@@ -1700,7 +1701,7 @@ TEST(TestAlignedAllocation) {
     // unaligned address.
     start = AlignNewSpace(kDoubleAligned, kPointerSize);
     obj = NewSpaceAllocateAligned(kPointerSize, kDoubleAligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment));
+    CHECK(IsAligned(obj->address(), kDoubleAlignment));
     // There is a filler object before the object.
     filler = HeapObject::FromAddress(start);
     CHECK(obj != filler && filler->IsFiller() &&
@@ -1710,11 +1711,11 @@ TEST(TestAlignedAllocation) {
     // Similarly for kDoubleUnaligned.
     start = AlignNewSpace(kDoubleUnaligned, 0);
     obj = NewSpaceAllocateAligned(kPointerSize, kDoubleUnaligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment, kPointerSize));
+    CHECK(IsAligned(obj->address() + kPointerSize, kDoubleAlignment));
     CHECK_EQ(kPointerSize, *top_addr - start);
     start = AlignNewSpace(kDoubleUnaligned, kPointerSize);
     obj = NewSpaceAllocateAligned(kPointerSize, kDoubleUnaligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment, kPointerSize));
+    CHECK(IsAligned(obj->address() + kPointerSize, kDoubleAlignment));
     // There is a filler object before the object.
     filler = HeapObject::FromAddress(start);
     CHECK(obj != filler && filler->IsFiller() &&
@@ -1774,11 +1775,11 @@ TEST(TestAlignedOverAllocation) {
     start = AlignOldSpace(kDoubleAligned, 0);
     obj = OldSpaceAllocateAligned(kPointerSize, kDoubleAligned);
     // The object is aligned.
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment));
+    CHECK(IsAligned(obj->address(), kDoubleAlignment));
     // Try the opposite alignment case.
     start = AlignOldSpace(kDoubleAligned, kPointerSize);
     obj = OldSpaceAllocateAligned(kPointerSize, kDoubleAligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment));
+    CHECK(IsAligned(obj->address(), kDoubleAlignment));
     filler = HeapObject::FromAddress(start);
     CHECK(obj != filler);
     CHECK(filler->IsFiller());
@@ -1790,11 +1791,11 @@ TEST(TestAlignedOverAllocation) {
     start = AlignOldSpace(kDoubleUnaligned, 0);
     obj = OldSpaceAllocateAligned(kPointerSize, kDoubleUnaligned);
     // The object is aligned.
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment, kPointerSize));
+    CHECK(IsAligned(obj->address() + kPointerSize, kDoubleAlignment));
     // Try the opposite alignment case.
     start = AlignOldSpace(kDoubleUnaligned, kPointerSize);
     obj = OldSpaceAllocateAligned(kPointerSize, kDoubleUnaligned);
-    CHECK(IsAddressAligned(obj->address(), kDoubleAlignment, kPointerSize));
+    CHECK(IsAligned(obj->address() + kPointerSize, kDoubleAlignment));
     filler = HeapObject::FromAddress(start);
     CHECK(obj != filler && filler->IsFiller() &&
           filler->Size() == kPointerSize);
@@ -2963,8 +2964,10 @@ TEST(ReleaseOverReservedPages) {
   if (FLAG_never_compact) return;
   FLAG_trace_gc = true;
   // The optimizer can allocate stuff, messing up the test.
+#ifndef V8_LITE_MODE
   FLAG_opt = false;
   FLAG_always_opt = false;
+#endif  // V8_LITE_MODE
   // - Parallel compaction increases fragmentation, depending on how existing
   //   memory is distributed. Since this is non-deterministic because of
   //   concurrent sweeping, we disable it for this test.
@@ -3065,6 +3068,7 @@ TEST(PrintSharedFunctionInfo) {
 
 
 TEST(IncrementalMarkingPreservesMonomorphicCallIC) {
+  if (!FLAG_use_ic) return;
   if (!FLAG_incremental_marking) return;
   if (FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -3143,6 +3147,7 @@ TEST(IncrementalMarkingPreservesMonomorphicConstructor) {
 }
 
 TEST(IncrementalMarkingPreservesMonomorphicIC) {
+  if (!FLAG_use_ic) return;
   if (!FLAG_incremental_marking) return;
   if (FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -3165,6 +3170,7 @@ TEST(IncrementalMarkingPreservesMonomorphicIC) {
 }
 
 TEST(IncrementalMarkingPreservesPolymorphicIC) {
+  if (!FLAG_use_ic) return;
   if (!FLAG_incremental_marking) return;
   if (FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -3203,6 +3209,7 @@ TEST(IncrementalMarkingPreservesPolymorphicIC) {
 }
 
 TEST(ContextDisposeDoesntClearPolymorphicIC) {
+  if (!FLAG_use_ic) return;
   if (!FLAG_incremental_marking) return;
   if (FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -3305,7 +3312,10 @@ UNINITIALIZED_TEST(ReleaseStackTraceData) {
     // See: https://codereview.chromium.org/181833004/
     return;
   }
-  FLAG_use_ic = false;  // ICs retain objects.
+#ifndef V8_LITE_MODE
+  // ICs retain objects.
+  FLAG_use_ic = false;
+#endif  // V8_LITE_MODE
   FLAG_concurrent_recompilation = false;
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
@@ -3359,7 +3369,9 @@ UNINITIALIZED_TEST(ReleaseStackTraceData) {
 
 TEST(Regress169928) {
   FLAG_allow_natives_syntax = true;
+#ifndef V8_LITE_MODE
   FLAG_opt = false;
+#endif  // V8_LITE_MODE
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   LocalContext env;
@@ -3485,8 +3497,8 @@ TEST(LargeObjectSlotRecording) {
 
 class DummyVisitor : public RootVisitor {
  public:
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override {}
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override {}
 };
 
 
@@ -4132,13 +4144,13 @@ TEST(WeakFunctionInConstructor) {
   Handle<FeedbackVector> feedback_vector =
       Handle<FeedbackVector>(createObj->feedback_vector(), CcTest::i_isolate());
   for (int i = 0; i < 20; i++) {
-    MaybeObject* slot_value = feedback_vector->Get(FeedbackSlot(0));
+    MaybeObject slot_value = feedback_vector->Get(FeedbackSlot(0));
     CHECK(slot_value->IsWeakOrCleared());
     if (slot_value->IsCleared()) break;
     CcTest::CollectAllGarbage();
   }
 
-  MaybeObject* slot_value = feedback_vector->Get(FeedbackSlot(0));
+  MaybeObject slot_value = feedback_vector->Get(FeedbackSlot(0));
   CHECK(slot_value->IsCleared());
   CompileRun(
       "function coat() { this.x = 6; }"
@@ -4341,6 +4353,7 @@ void CheckIC(Handle<JSFunction> function, int slot_index,
 }
 
 TEST(MonomorphicStaysMonomorphicAfterGC) {
+  if (!FLAG_use_ic) return;
   if (FLAG_always_opt) return;
   ManualGCScope manual_gc_scope;
   CcTest::InitializeVM();
@@ -4374,6 +4387,7 @@ TEST(MonomorphicStaysMonomorphicAfterGC) {
 
 
 TEST(PolymorphicStaysPolymorphicAfterGC) {
+  if (!FLAG_use_ic) return;
   if (FLAG_always_opt) return;
   ManualGCScope manual_gc_scope;
   CcTest::InitializeVM();
@@ -4590,7 +4604,8 @@ TEST(Regress388880) {
   // Allocate padding objects in old pointer space so, that object allocated
   // afterwards would end at the end of the page.
   heap::SimulateFullSpace(heap->old_space());
-  size_t padding_size = desired_offset - Page::kObjectStartOffset;
+  size_t padding_size =
+      desired_offset - MemoryChunkLayout::ObjectStartOffsetInDataPage();
   heap::CreatePadding(heap, static_cast<int>(padding_size), TENURED);
 
   Handle<JSObject> o = factory->NewJSObjectFromMap(map1, TENURED);
@@ -5744,8 +5759,8 @@ TEST(RememberedSetRemoveRange) {
   }
 
   RememberedSet<OLD_TO_NEW>::Iterate(chunk,
-                                     [&slots](Address addr) {
-                                       CHECK(slots[addr]);
+                                     [&slots](MaybeObjectSlot slot) {
+                                       CHECK(slots[slot.address()]);
                                        return KEEP_SLOT;
                                      },
                                      SlotSet::PREFREE_EMPTY_BUCKETS);
@@ -5754,8 +5769,8 @@ TEST(RememberedSetRemoveRange) {
                                          SlotSet::FREE_EMPTY_BUCKETS);
   slots[start] = false;
   RememberedSet<OLD_TO_NEW>::Iterate(chunk,
-                                     [&slots](Address addr) {
-                                       CHECK(slots[addr]);
+                                     [&slots](MaybeObjectSlot slot) {
+                                       CHECK(slots[slot.address()]);
                                        return KEEP_SLOT;
                                      },
                                      SlotSet::PREFREE_EMPTY_BUCKETS);
@@ -5766,8 +5781,8 @@ TEST(RememberedSetRemoveRange) {
   slots[start + kPointerSize] = false;
   slots[start + Page::kPageSize - kPointerSize] = false;
   RememberedSet<OLD_TO_NEW>::Iterate(chunk,
-                                     [&slots](Address addr) {
-                                       CHECK(slots[addr]);
+                                     [&slots](MaybeObjectSlot slot) {
+                                       CHECK(slots[slot.address()]);
                                        return KEEP_SLOT;
                                      },
                                      SlotSet::PREFREE_EMPTY_BUCKETS);
@@ -5777,8 +5792,8 @@ TEST(RememberedSetRemoveRange) {
                                          SlotSet::FREE_EMPTY_BUCKETS);
   slots[start + Page::kPageSize] = false;
   RememberedSet<OLD_TO_NEW>::Iterate(chunk,
-                                     [&slots](Address addr) {
-                                       CHECK(slots[addr]);
+                                     [&slots](MaybeObjectSlot slot) {
+                                       CHECK(slots[slot.address()]);
                                        return KEEP_SLOT;
                                      },
                                      SlotSet::PREFREE_EMPTY_BUCKETS);
@@ -5788,8 +5803,8 @@ TEST(RememberedSetRemoveRange) {
       SlotSet::FREE_EMPTY_BUCKETS);
   slots[chunk->area_end() - kPointerSize] = false;
   RememberedSet<OLD_TO_NEW>::Iterate(chunk,
-                                     [&slots](Address addr) {
-                                       CHECK(slots[addr]);
+                                     [&slots](MaybeObjectSlot slot) {
+                                       CHECK(slots[slot.address()]);
                                        return KEEP_SLOT;
                                      },
                                      SlotSet::PREFREE_EMPTY_BUCKETS);
@@ -6125,10 +6140,11 @@ size_t NearHeapLimitCallback(void* raw_state, size_t current_heap_limit,
 
 size_t MemoryAllocatorSizeFromHeapCapacity(size_t capacity) {
   // Size to capacity factor.
-  double factor = Page::kPageSize * 1.0 / Page::kAllocatableMemory;
+  double factor =
+      Page::kPageSize * 1.0 / MemoryChunkLayout::AllocatableMemoryInDataPage();
   // Some tables (e.g. deoptimization table) are allocated directly with the
   // memory allocator. Allow some slack to account for them.
-  size_t slack = 1 * MB;
+  size_t slack = 5 * MB;
   return static_cast<size_t>(capacity * factor) + slack;
 }
 

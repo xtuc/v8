@@ -17,28 +17,16 @@
 #include "src/base/flags.h"
 #include "src/base/logging.h"
 #include "src/checks.h"
+#include "src/constants-arch.h"
 #include "src/elements-kind.h"
 #include "src/field-index.h"
 #include "src/flags.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects-definitions.h"
 #include "src/property-details.h"
 #include "src/roots.h"
 #include "src/utils.h"
 
-#if V8_TARGET_ARCH_ARM
-#include "src/arm/constants-arm.h"  // NOLINT
-#elif V8_TARGET_ARCH_ARM64
-#include "src/arm64/constants-arm64.h"  // NOLINT
-#elif V8_TARGET_ARCH_MIPS
-#include "src/mips/constants-mips.h"  // NOLINT
-#elif V8_TARGET_ARCH_MIPS64
-#include "src/mips64/constants-mips64.h"  // NOLINT
-#elif V8_TARGET_ARCH_PPC
-#include "src/ppc/constants-ppc.h"  // NOLINT
-#elif V8_TARGET_ARCH_S390
-#include "src/s390/constants-s390.h"  // NOLINT
-#endif
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -84,6 +72,7 @@
 //         - JSNumberFormat        // If V8_INTL_SUPPORT enabled.
 //         - JSPluralRules         // If V8_INTL_SUPPORT enabled.
 //         - JSRelativeTimeFormat  // If V8_INTL_SUPPORT enabled.
+//         - JSSegmentIterator     // If V8_INTL_SUPPORT enabled.
 //         - JSSegmenter           // If V8_INTL_SUPPORT enabled.
 //         - WasmExceptionObject
 //         - WasmGlobalObject
@@ -426,7 +415,8 @@ enum InstanceType : uint16_t {
   CALLBACK_TASK_TYPE,
   PROMISE_FULFILL_REACTION_JOB_TASK_TYPE,
   PROMISE_REJECT_REACTION_JOB_TASK_TYPE,
-  PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE,  // LAST_MICROTASK_TYPE
+  PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE,
+  WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE,  // LAST_MICROTASK_TYPE
 
   MICROTASK_QUEUE_TYPE,
 
@@ -501,6 +491,7 @@ enum InstanceType : uint16_t {
   JS_ARRAY_ITERATOR_TYPE,
   JS_ARRAY_TYPE,
   JS_ASYNC_FROM_SYNC_ITERATOR_TYPE,
+  JS_ASYNC_FUNCTION_OBJECT_TYPE,
   JS_ASYNC_GENERATOR_OBJECT_TYPE,
   JS_CONTEXT_EXTENSION_OBJECT_TYPE,
   JS_DATE_TYPE,
@@ -518,7 +509,8 @@ enum InstanceType : uint16_t {
   JS_SET_KEY_VALUE_ITERATOR_TYPE,
   JS_SET_VALUE_ITERATOR_TYPE,
   JS_STRING_ITERATOR_TYPE,
-  JS_WEAK_CELL_TYPE,
+  JS_WEAK_CELL_TYPE,  // FIRST_JS_WEAK_CELL_TYPE
+  JS_WEAK_REF_TYPE,   // LAST_JS_WEAK_CELL_TYPE
   JS_WEAK_FACTORY_CLEANUP_ITERATOR_TYPE,
   JS_WEAK_FACTORY_TYPE,
   JS_WEAK_MAP_TYPE,
@@ -536,6 +528,7 @@ enum InstanceType : uint16_t {
   JS_INTL_NUMBER_FORMAT_TYPE,
   JS_INTL_PLURAL_RULES_TYPE,
   JS_INTL_RELATIVE_TIME_FORMAT_TYPE,
+  JS_INTL_SEGMENT_ITERATOR_TYPE,
   JS_INTL_SEGMENTER_TYPE,
 #endif  // V8_INTL_SUPPORT
 
@@ -577,7 +570,7 @@ enum InstanceType : uint16_t {
   LAST_CONTEXT_TYPE = WITH_CONTEXT_TYPE,
   // Boundaries for testing if given HeapObject is a subclass of Microtask.
   FIRST_MICROTASK_TYPE = CALLABLE_TASK_TYPE,
-  LAST_MICROTASK_TYPE = PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE,
+  LAST_MICROTASK_TYPE = WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE,
   // Boundaries for testing for a fixed typed array.
   FIRST_FIXED_TYPED_ARRAY_TYPE = FIXED_INT8_ARRAY_TYPE,
   LAST_FIXED_TYPED_ARRAY_TYPE = FIXED_BIGUINT64_ARRAY_TYPE,
@@ -605,6 +598,9 @@ enum InstanceType : uint16_t {
 
   FIRST_MAP_ITERATOR_TYPE = JS_MAP_KEY_ITERATOR_TYPE,
   LAST_MAP_ITERATOR_TYPE = JS_MAP_VALUE_ITERATOR_TYPE,
+
+  FIRST_JS_WEAK_CELL_TYPE = JS_WEAK_CELL_TYPE,
+  LAST_JS_WEAK_CELL_TYPE = JS_WEAK_REF_TYPE,
 };
 
 STATIC_ASSERT((FIRST_NONSTRING_TYPE & kIsNotStringMask) != kStringTag);
@@ -643,13 +639,18 @@ class DependentCode;
 class ElementsAccessor;
 class EnumCache;
 class FixedArrayBase;
-class PropertyArray;
+class FixedDoubleArray;
 class FunctionLiteral;
 class FunctionTemplateInfo;
+class JSAsyncGeneratorObject;
+class JSGlobalProxy;
+class JSPromise;
+class JSProxy;
 class KeyAccumulator;
 class LayoutDescriptor;
 class LookupIterator;
 class FieldType;
+class MaybeObjectSlot;
 class MicrotaskQueue;
 class Module;
 class ModuleInfoEntry;
@@ -657,12 +658,16 @@ class ObjectHashTable;
 class ObjectTemplateInfo;
 class ObjectVisitor;
 class PreParsedScopeData;
+class PropertyArray;
 class PropertyCell;
 class PropertyDescriptor;
+class RegExpMatchInfo;
 class RootVisitor;
 class SafepointEntry;
+class ScriptContextTable;
 class SharedFunctionInfo;
 class StringStream;
+class Symbol;
 class FeedbackCell;
 class FeedbackMetadata;
 class FeedbackVector;
@@ -670,6 +675,8 @@ class UncompiledData;
 class TemplateInfo;
 class TransitionArray;
 class TemplateList;
+class WasmInstanceObject;
+class WasmMemoryObject;
 template <typename T>
 class ZoneForwardList;
 
@@ -755,6 +762,7 @@ class ZoneForwardList;
   V(JSArrayBufferView)                         \
   V(JSArrayIterator)                           \
   V(JSAsyncFromSyncIterator)                   \
+  V(JSAsyncFunctionObject)                     \
   V(JSAsyncGeneratorObject)                    \
   V(JSBoundFunction)                           \
   V(JSCollection)                              \
@@ -784,6 +792,7 @@ class ZoneForwardList;
   V(JSTypedArray)                              \
   V(JSValue)                                   \
   V(JSWeakCell)                                \
+  V(JSWeakRef)                                 \
   V(JSWeakCollection)                          \
   V(JSWeakFactory)                             \
   V(JSWeakFactoryCleanupIterator)              \
@@ -863,6 +872,7 @@ class ZoneForwardList;
   V(JSNumberFormat)                       \
   V(JSPluralRules)                        \
   V(JSRelativeTimeFormat)                 \
+  V(JSSegmentIterator)                    \
   V(JSSegmenter)
 #else
 #define HEAP_OBJECT_ORDINARY_TYPE_LIST(V) HEAP_OBJECT_ORDINARY_TYPE_LIST_BASE(V)
@@ -918,6 +928,7 @@ class ZoneForwardList;
   V(JSArrayBuffer, JS_ARRAY_BUFFER_TYPE)                                 \
   V(JSArrayIterator, JS_ARRAY_ITERATOR_TYPE)                             \
   V(JSAsyncFromSyncIterator, JS_ASYNC_FROM_SYNC_ITERATOR_TYPE)           \
+  V(JSAsyncFunctionObject, JS_ASYNC_FUNCTION_OBJECT_TYPE)                \
   V(JSAsyncGeneratorObject, JS_ASYNC_GENERATOR_OBJECT_TYPE)              \
   V(JSBoundFunction, JS_BOUND_FUNCTION_TYPE)                             \
   V(JSContextExtensionObject, JS_CONTEXT_EXTENSION_OBJECT_TYPE)          \
@@ -939,10 +950,10 @@ class ZoneForwardList;
   V(JSStringIterator, JS_STRING_ITERATOR_TYPE)                           \
   V(JSTypedArray, JS_TYPED_ARRAY_TYPE)                                   \
   V(JSValue, JS_VALUE_TYPE)                                              \
-  V(JSWeakCell, JS_WEAK_CELL_TYPE)                                       \
   V(JSWeakFactory, JS_WEAK_FACTORY_TYPE)                                 \
   V(JSWeakFactoryCleanupIterator, JS_WEAK_FACTORY_CLEANUP_ITERATOR_TYPE) \
   V(JSWeakMap, JS_WEAK_MAP_TYPE)                                         \
+  V(JSWeakRef, JS_WEAK_REF_TYPE)                                         \
   V(JSWeakSet, JS_WEAK_SET_TYPE)                                         \
   V(LoadHandler, LOAD_HANDLER_TYPE)                                      \
   V(Map, MAP_TYPE)                                                       \
@@ -992,6 +1003,7 @@ class ZoneForwardList;
   V(JSNumberFormat, JS_INTL_NUMBER_FORMAT_TYPE)              \
   V(JSPluralRules, JS_INTL_PLURAL_RULES_TYPE)                \
   V(JSRelativeTimeFormat, JS_INTL_RELATIVE_TIME_FORMAT_TYPE) \
+  V(JSSegmentIterator, JS_INTL_SEGMENT_ITERATOR_TYPE)        \
   V(JSSegmenter, JS_INTL_SEGMENTER_TYPE)
 
 #else
@@ -1009,6 +1021,7 @@ class ZoneForwardList;
   V(HashTable, FIRST_HASH_TABLE_TYPE, LAST_HASH_TABLE_TYPE)         \
   V(JSMapIterator, FIRST_MAP_ITERATOR_TYPE, LAST_MAP_ITERATOR_TYPE) \
   V(JSSetIterator, FIRST_SET_ITERATOR_TYPE, LAST_SET_ITERATOR_TYPE) \
+  V(JSWeakCell, FIRST_JS_WEAK_CELL_TYPE, LAST_JS_WEAK_CELL_TYPE)    \
   V(Microtask, FIRST_MICROTASK_TYPE, LAST_MICROTASK_TYPE)           \
   V(Name, FIRST_TYPE, LAST_NAME_TYPE)                               \
   V(String, FIRST_TYPE, FIRST_NONSTRING_TYPE - 1)                   \
@@ -1047,6 +1060,33 @@ STRUCT_LIST(STRUCT_IS_TYPE_FUNCTION_DECL)
 // The element types selection for CreateListFromArrayLike.
 enum class ElementTypes { kAll, kStringAndSymbol };
 
+// TODO(3770): Get rid of this indirection when the migration is complete.
+typedef AbstractCode* AbstractCodeArgType;
+typedef ByteArray* ByteArrayArgType;
+typedef FixedArray* FixedArrayArgType;
+typedef FixedDoubleArray* FixedDoubleArrayArgType;
+typedef Foreign* ForeignArgType;
+typedef HeapObject* HeapObjectArgType;
+typedef JSArray* JSArrayArgType;
+typedef JSAsyncGeneratorObject* JSAsyncGeneratorObjectArgType;
+typedef JSFunction* JSFunctionArgType;
+typedef JSGlobalProxy* JSGlobalProxyArgType;
+typedef JSObject* JSObjectArgType;
+typedef JSPromise* JSPromiseArgType;
+typedef JSProxy* JSProxyArgType;
+typedef Map* MapArgType;
+typedef Object* ObjectArgType;
+typedef RegExpMatchInfo* RegExpMatchInfoArgType;
+typedef ScriptContextTable* ScriptContextTableArgType;
+typedef SharedFunctionInfo* SharedFunctionInfoArgType;
+typedef SimpleNumberDictionary* SimpleNumberDictionaryArgType;
+typedef Smi SmiArgType;
+typedef String* StringArgType;
+typedef Symbol* SymbolArgType;
+typedef TemplateList* TemplateListArgType;
+typedef WasmInstanceObject* WasmInstanceObjectArgType;
+typedef WasmMemoryObject* WasmMemoryObjectArgType;
+
 // Object is the abstract superclass for all classes in the
 // object hierarchy.
 // Object does not use any virtual functions to avoid the
@@ -1057,6 +1097,10 @@ class Object {
  public:
   // Type testing.
   bool IsObject() const { return true; }
+
+  // Syntax compatibility with ObjectPtr, so the same macros can consume
+  // arguments of either type.
+  Address ptr() const { return reinterpret_cast<Address>(this); }
 
 #define IS_TYPE_FUNCTION_DECL(Type) V8_INLINE bool Is##Type() const;
   OBJECT_TYPE_LIST(IS_TYPE_FUNCTION_DECL)
@@ -1228,8 +1272,7 @@ class Object {
 
   // ES6 section 7.1.17 ToIndex
   V8_WARN_UNUSED_RESULT static inline MaybeHandle<Object> ToIndex(
-      Isolate* isolate, Handle<Object> input,
-      MessageTemplate::Template error_index);
+      Isolate* isolate, Handle<Object> input, MessageTemplate error_index);
 
   // ES6 section 7.3.9 GetMethod
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> GetMethod(
@@ -1346,12 +1389,13 @@ class Object {
   // Returns the permanent hash code associated with this object depending on
   // the actual object type. May create and store a hash code if needed and none
   // exists.
-  Smi* GetOrCreateHash(Isolate* isolate);
-  static Smi* GetOrCreateHash(Isolate* isolate, Object* key);
+  Smi GetOrCreateHash(Isolate* isolate);
+  // Returns a tagged Smi as a raw Address for ExternalReference usage.
+  static Address GetOrCreateHash(Isolate* isolate, Object* key);
 
   // Checks whether this object has the same value as the given one.  This
   // function is implemented according to ES5, section 9.12 and can be used
-  // to implement the Harmony "egal" function.
+  // to implement the Object.is function.
   V8_EXPORT_PRIVATE bool SameValue(Object* other);
 
   // Checks whether this object has the same value as the given one.
@@ -1376,7 +1420,7 @@ class Object {
   // Tries to convert an object to an array index. Returns true and sets the
   // output parameter if it succeeds. Equivalent to ToArrayLength, but does not
   // allow kMaxUInt32.
-  inline bool ToArrayIndex(uint32_t* index) const;
+  V8_WARN_UNUSED_RESULT inline bool ToArrayIndex(uint32_t* index) const;
 
   // Returns true if the result of iterating over the object is the same
   // (including observable effects) as simply accessing the properties between 0
@@ -1454,93 +1498,28 @@ class Object {
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> ConvertToLength(
       Isolate* isolate, Handle<Object> input);
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> ConvertToIndex(
-      Isolate* isolate, Handle<Object> input,
-      MessageTemplate::Template error_index);
+      Isolate* isolate, Handle<Object> input, MessageTemplate error_index);
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(Object);
 };
 
-
 // In objects.h to be usable without objects-inl.h inclusion.
-bool Object::IsSmi() const { return HAS_SMI_TAG(this); }
+bool Object::IsSmi() const { return HAS_SMI_TAG(ptr()); }
 bool Object::IsHeapObject() const {
-  DCHECK_EQ(!IsSmi(), Internals::HasHeapObjectTag(this));
+  DCHECK_EQ(!IsSmi(), Internals::HasHeapObjectTag(ptr()));
   return !IsSmi();
 }
 
 struct Brief {
   V8_EXPORT_PRIVATE explicit Brief(const Object* v);
-  explicit Brief(const MaybeObject* v) : value(v) {}
-  const MaybeObject* value;
+  explicit Brief(const MaybeObject v);
+  // {value} is a tagged heap object reference (weak or strong), equivalent to
+  // a MaybeObject's payload. It has a plain Address type to keep #includes
+  // lightweight.
+  const Address value;
 };
 
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os, const Brief& v);
-
-// Smi represents integer Numbers that can be stored in 31 bits.
-// Smis are immediate which means they are NOT allocated in the heap.
-// The this pointer has the following format: [31 bit signed int] 0
-// For long smis it has the following format:
-//     [32 bit signed int] [31 bits zero padding] 0
-// Smi stands for small integer.
-class Smi: public Object {
- public:
-  // Returns the integer value.
-  inline int value() const { return Internals::SmiValue(this); }
-  inline Smi* ToUint32Smi() {
-    if (value() <= 0) return Smi::kZero;
-    return Smi::FromInt(static_cast<uint32_t>(value()));
-  }
-
-  // Convert a Smi object to an int.
-  static inline int ToInt(const Object* object);
-
-  // Convert a value to a Smi object.
-  static inline Smi* FromInt(int value) {
-    DCHECK(Smi::IsValid(value));
-    return reinterpret_cast<Smi*>(Internals::IntToSmi(value));
-  }
-
-  static inline Smi* FromIntptr(intptr_t value) {
-    DCHECK(Smi::IsValid(value));
-    int smi_shift_bits = kSmiTagSize + kSmiShiftSize;
-    return reinterpret_cast<Smi*>((value << smi_shift_bits) | kSmiTag);
-  }
-
-  template <typename E,
-            typename = typename std::enable_if<std::is_enum<E>::value>::type>
-  static inline Smi* FromEnum(E value) {
-    STATIC_ASSERT(sizeof(E) <= sizeof(int));
-    return FromInt(static_cast<int>(value));
-  }
-
-  // Returns whether value can be represented in a Smi.
-  static inline bool IsValid(intptr_t value) {
-    bool result = Internals::IsValidSmi(value);
-    DCHECK_EQ(result, value >= kMinValue && value <= kMaxValue);
-    return result;
-  }
-
-  // Compare two Smis x, y as if they were converted to strings and then
-  // compared lexicographically. Returns:
-  // -1 if x < y.
-  //  0 if x == y.
-  //  1 if x > y.
-  static Smi* LexicographicCompare(Isolate* isolate, Smi* x, Smi* y);
-
-  DECL_CAST(Smi)
-
-  // Dispatched behavior.
-  V8_EXPORT_PRIVATE void SmiPrint(std::ostream& os) const;  // NOLINT
-  DECL_VERIFIER(Smi)
-
-  static constexpr Smi* const kZero = nullptr;
-  static const int kMinValue = kSmiMinValue;
-  static const int kMaxValue = kSmiMaxValue;
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Smi);
-};
-
 
 // Heap objects typically have a map pointer in their first word.  However,
 // during GC other data (e.g. mark bits, forwarding addresses) is sometimes
@@ -1597,7 +1576,7 @@ class HeapObject: public Object {
   inline Map* map() const;
   inline void set_map(Map* value);
 
-  inline HeapObject** map_slot();
+  inline ObjectSlot map_slot();
 
   // The no-write-barrier version.  This is OK if the object is white and in
   // new space, or if the value is an immortal immutable object, like the maps
@@ -1703,8 +1682,10 @@ class HeapObject: public Object {
   // Does no checking, and is safe to use during GC, while maps are invalid.
   // Does not invoke write barrier, so should only be assigned to
   // during marking GC.
-  static inline Object** RawField(const HeapObject* obj, int offset);
-  static inline MaybeObject** RawMaybeWeakField(HeapObject* obj, int offset);
+  inline ObjectSlot RawField(int byte_offset) const;
+  static inline ObjectSlot RawField(const HeapObject* obj, int offset);
+  inline MaybeObjectSlot RawMaybeWeakField(int byte_offset) const;
+  static inline MaybeObjectSlot RawMaybeWeakField(HeapObject* obj, int offset);
 
   DECL_CAST(HeapObject)
 

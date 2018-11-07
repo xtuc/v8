@@ -5,6 +5,7 @@
 #include "src/reloc-info.h"
 
 #include "src/assembler-arch-inl.h"
+#include "src/code-reference.h"
 #include "src/code-stubs.h"
 #include "src/deoptimize-reason.h"
 #include "src/deoptimizer.h"
@@ -425,8 +426,6 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
       return "internal wasm call";
     case WASM_STUB_CALL:
       return "wasm stub call";
-    case JS_TO_WASM_CALL:
-      return "js to wasm call";
     case NUMBER_OF_MODES:
     case PC_JUMP:
       UNREACHABLE();
@@ -525,7 +524,6 @@ void RelocInfo::Verify(Isolate* isolate) {
     case VENEER_POOL:
     case WASM_CALL:
     case WASM_STUB_CALL:
-    case JS_TO_WASM_CALL:
     case NONE:
       break;
     case NUMBER_OF_MODES:

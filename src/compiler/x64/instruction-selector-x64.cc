@@ -8,6 +8,7 @@
 #include "src/compiler/instruction-selector-impl.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
+#include "src/roots-inl.h"
 #include "src/turbo-assembler.h"
 
 namespace v8 {
@@ -308,8 +309,7 @@ void InstructionSelector::VisitLoad(Node* node) {
   X64OperandGenerator g(this);
 
   ArchOpcode opcode = GetLoadOpcode(load_rep);
-  InstructionOperand outputs[1];
-  outputs[0] = g.DefineAsRegister(node);
+  InstructionOperand outputs[] = {g.DefineAsRegister(node)};
   InstructionOperand inputs[3];
   size_t input_count = 0;
   AddressingMode mode =
@@ -536,6 +536,43 @@ void InstructionSelector::VisitWord64Xor(Node* node) {
 
 namespace {
 
+bool TryMergeTruncateInt64ToInt32IntoLoad(InstructionSelector* selector,
+                                          Node* node, Node* load) {
+  if (load->opcode() == IrOpcode::kLoad && selector->CanCover(node, load)) {
+    LoadRepresentation load_rep = LoadRepresentationOf(load->op());
+    MachineRepresentation rep = load_rep.representation();
+    InstructionCode opcode = kArchNop;
+    switch (rep) {
+      case MachineRepresentation::kBit:  // Fall through.
+      case MachineRepresentation::kWord8:
+        opcode = load_rep.IsSigned() ? kX64Movsxbl : kX64Movzxbl;
+        break;
+      case MachineRepresentation::kWord16:
+        opcode = load_rep.IsSigned() ? kX64Movsxwl : kX64Movzxwl;
+        break;
+      case MachineRepresentation::kWord32:
+      case MachineRepresentation::kWord64:
+      case MachineRepresentation::kTaggedSigned:
+      case MachineRepresentation::kTagged:
+        opcode = kX64Movl;
+        break;
+      default:
+        UNREACHABLE();
+        return false;
+    }
+    X64OperandGenerator g(selector);
+    InstructionOperand outputs[] = {g.DefineAsRegister(node)};
+    size_t input_count = 0;
+    InstructionOperand inputs[3];
+    AddressingMode mode = g.GetEffectiveAddressMemoryOperand(
+        node->InputAt(0), inputs, &input_count);
+    opcode |= AddressingModeField::encode(mode);
+    selector->Emit(opcode, 1, outputs, input_count, inputs);
+    return true;
+  }
+  return false;
+}
+
 // Shared routine for multiple 32-bit shift operations.
 // TODO(bmeurer): Merge this with VisitWord64Shift using template magic?
 void VisitWord32Shift(InstructionSelector* selector, Node* node,
@@ -544,6 +581,11 @@ void VisitWord32Shift(InstructionSelector* selector, Node* node,
   Int32BinopMatcher m(node);
   Node* left = m.left().node();
   Node* right = m.right().node();
+
+  if (left->opcode() == IrOpcode::kTruncateInt64ToInt32 &&
+      selector->CanCover(node, left)) {
+    left = left->InputAt(0);
+  }
 
   if (g.CanBeImmediate(right)) {
     selector->Emit(opcode, g.DefineSameAsFirst(node), g.UseRegister(left),
@@ -670,6 +712,52 @@ void InstructionSelector::VisitWord32Shr(Node* node) {
 }
 
 namespace {
+
+inline AddressingMode AddDisplacementToAddressingMode(AddressingMode mode) {
+  switch (mode) {
+    case kMode_MR:
+      return kMode_MRI;
+      break;
+    case kMode_MR1:
+      return kMode_MR1I;
+      break;
+    case kMode_MR2:
+      return kMode_MR2I;
+      break;
+    case kMode_MR4:
+      return kMode_MR4I;
+      break;
+    case kMode_MR8:
+      return kMode_MR8I;
+      break;
+    case kMode_M1:
+      return kMode_M1I;
+      break;
+    case kMode_M2:
+      return kMode_M2I;
+      break;
+    case kMode_M4:
+      return kMode_M4I;
+      break;
+    case kMode_M8:
+      return kMode_M8I;
+      break;
+    case kMode_None:
+    case kMode_MRI:
+    case kMode_MR1I:
+    case kMode_MR2I:
+    case kMode_MR4I:
+    case kMode_MR8I:
+    case kMode_M1I:
+    case kMode_M2I:
+    case kMode_M4I:
+    case kMode_M8I:
+    case kMode_Root:
+      UNREACHABLE();
+  }
+  UNREACHABLE();
+}
+
 bool TryMatchLoadWord64AndShiftRight(InstructionSelector* selector, Node* node,
                                      InstructionCode opcode) {
   DCHECK(IrOpcode::kWord64Sar == node->opcode() ||
@@ -678,6 +766,8 @@ bool TryMatchLoadWord64AndShiftRight(InstructionSelector* selector, Node* node,
   Int64BinopMatcher m(node);
   if (selector->CanCover(m.node(), m.left().node()) && m.left().IsLoad() &&
       m.right().Is(32)) {
+    DCHECK_EQ(selector->GetEffectLevel(node),
+              selector->GetEffectLevel(m.left().node()));
     // Just load and sign-extend the interesting 4 bytes instead. This happens,
     // for example, when we're loading and untagging SMIs.
     BaseWithIndexAndDisplacement64Matcher mleft(m.left().node(),
@@ -692,47 +782,7 @@ bool TryMatchLoadWord64AndShiftRight(InstructionSelector* selector, Node* node,
         // Make sure that the addressing mode indicates the presence of an
         // immediate displacement. It seems that we never use M1 and M2, but we
         // handle them here anyways.
-        switch (mode) {
-          case kMode_MR:
-            mode = kMode_MRI;
-            break;
-          case kMode_MR1:
-            mode = kMode_MR1I;
-            break;
-          case kMode_MR2:
-            mode = kMode_MR2I;
-            break;
-          case kMode_MR4:
-            mode = kMode_MR4I;
-            break;
-          case kMode_MR8:
-            mode = kMode_MR8I;
-            break;
-          case kMode_M1:
-            mode = kMode_M1I;
-            break;
-          case kMode_M2:
-            mode = kMode_M2I;
-            break;
-          case kMode_M4:
-            mode = kMode_M4I;
-            break;
-          case kMode_M8:
-            mode = kMode_M8I;
-            break;
-          case kMode_None:
-          case kMode_MRI:
-          case kMode_MR1I:
-          case kMode_MR2I:
-          case kMode_MR4I:
-          case kMode_MR8I:
-          case kMode_M1I:
-          case kMode_M2I:
-          case kMode_M4I:
-          case kMode_M8I:
-          case kMode_Root:
-            UNREACHABLE();
-        }
+        mode = AddDisplacementToAddressingMode(mode);
         inputs[input_count++] = ImmediateOperand(ImmediateOperand::INLINE, 4);
       } else {
         // In the case that the base address was zero, the displacement will be
@@ -751,6 +801,7 @@ bool TryMatchLoadWord64AndShiftRight(InstructionSelector* selector, Node* node,
   }
   return false;
 }
+
 }  // namespace
 
 void InstructionSelector::VisitWord64Shr(Node* node) {
@@ -1275,6 +1326,7 @@ void VisitFloatUnop(InstructionSelector* selector, Node* node, Node* input,
   V(ChangeFloat64ToInt32, kSSEFloat64ToInt32)                            \
   V(ChangeFloat64ToInt64, kSSEFloat64ToInt64)                            \
   V(ChangeFloat64ToUint32, kSSEFloat64ToUint32 | MiscField::encode(1))   \
+  V(TruncateFloat64ToInt64, kSSEFloat64ToInt64)                          \
   V(TruncateFloat64ToUint32, kSSEFloat64ToUint32 | MiscField::encode(0)) \
   V(ChangeFloat64ToUint64, kSSEFloat64ToUint64)                          \
   V(TruncateFloat64ToFloat32, kSSEFloat64ToFloat32)                      \
@@ -1343,11 +1395,18 @@ void InstructionSelector::VisitTruncateInt64ToInt32(Node* node) {
       case IrOpcode::kWord64Shr: {
         Int64BinopMatcher m(value);
         if (m.right().Is(32)) {
-          if (TryMatchLoadWord64AndShiftRight(this, value, kX64Movl)) {
+          if (CanCoverTransitively(node, value, value->InputAt(0)) &&
+              TryMatchLoadWord64AndShiftRight(this, value, kX64Movl)) {
             return EmitIdentity(node);
           }
           Emit(kX64Shr, g.DefineSameAsFirst(node),
                g.UseRegister(m.left().node()), g.TempImmediate(32));
+          return;
+        }
+        break;
+      }
+      case IrOpcode::kLoad: {
+        if (TryMergeTruncateInt64ToInt32IntoLoad(this, node, value)) {
           return;
         }
         break;
@@ -1670,10 +1729,13 @@ void VisitWordCompare(InstructionSelector* selector, Node* node,
   // The 32-bit comparisons automatically truncate Word64
   // values to Word32 range, no need to do that explicitly.
   if (opcode == kX64Cmp32 || opcode == kX64Test32) {
-    while (left->opcode() == IrOpcode::kTruncateInt64ToInt32) {
+    if (left->opcode() == IrOpcode::kTruncateInt64ToInt32 &&
+        selector->CanCover(node, left)) {
       left = left->InputAt(0);
     }
-    while (right->opcode() == IrOpcode::kTruncateInt64ToInt32) {
+
+    if (right->opcode() == IrOpcode::kTruncateInt64ToInt32 &&
+        selector->CanCover(node, right)) {
       right = right->InputAt(0);
     }
   }
@@ -1720,25 +1782,27 @@ void VisitWord64Compare(InstructionSelector* selector, Node* node,
                         FlagsContinuation* cont) {
   X64OperandGenerator g(selector);
   if (selector->CanUseRootsRegister()) {
-    Heap* const heap = selector->isolate()->heap();
+    const RootsTable& roots_table = selector->isolate()->roots_table();
     RootIndex root_index;
     HeapObjectBinopMatcher m(node);
     if (m.right().HasValue() &&
-        heap->IsRootHandle(m.right().Value(), &root_index)) {
+        roots_table.IsRootHandle(m.right().Value(), &root_index)) {
       if (!node->op()->HasProperty(Operator::kCommutative)) cont->Commute();
       InstructionCode opcode =
           kX64Cmp | AddressingModeField::encode(kMode_Root);
       return VisitCompare(
           selector, opcode,
-          g.TempImmediate(TurboAssemblerBase::RootRegisterOffset(root_index)),
+          g.TempImmediate(
+              TurboAssemblerBase::RootRegisterOffsetForRootIndex(root_index)),
           g.UseRegister(m.left().node()), cont);
     } else if (m.left().HasValue() &&
-               heap->IsRootHandle(m.left().Value(), &root_index)) {
+               roots_table.IsRootHandle(m.left().Value(), &root_index)) {
       InstructionCode opcode =
           kX64Cmp | AddressingModeField::encode(kMode_Root);
       return VisitCompare(
           selector, opcode,
-          g.TempImmediate(TurboAssemblerBase::RootRegisterOffset(root_index)),
+          g.TempImmediate(
+              TurboAssemblerBase::RootRegisterOffsetForRootIndex(root_index)),
           g.UseRegister(m.right().node()), cont);
     }
   }
@@ -1816,7 +1880,37 @@ void VisitCompareZero(InstructionSelector* selector, Node* user, Node* node,
         break;
     }
   }
-  VisitCompare(selector, opcode, g.Use(node), g.TempImmediate(0), cont);
+  int effect_level = selector->GetEffectLevel(node);
+  if (cont->IsBranch()) {
+    effect_level = selector->GetEffectLevel(
+        cont->true_block()->PredecessorAt(0)->control_input());
+  }
+  if (node->opcode() == IrOpcode::kLoad) {
+    switch (LoadRepresentationOf(node->op()).representation()) {
+      case MachineRepresentation::kWord8:
+        if (opcode == kX64Cmp32) {
+          opcode = kX64Cmp8;
+        } else if (opcode == kX64Test32) {
+          opcode = kX64Test8;
+        }
+        break;
+      case MachineRepresentation::kWord16:
+        if (opcode == kX64Cmp32) {
+          opcode = kX64Cmp16;
+        } else if (opcode == kX64Test32) {
+          opcode = kX64Test16;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  if (g.CanBeMemoryOperand(opcode, user, node, effect_level)) {
+    VisitCompareWithMemoryOperand(selector, opcode, node, g.TempImmediate(0),
+                                  cont);
+  } else {
+    VisitCompare(selector, opcode, g.Use(node), g.TempImmediate(0), cont);
+  }
 }
 
 

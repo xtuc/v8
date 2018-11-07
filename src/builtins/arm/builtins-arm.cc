@@ -14,6 +14,7 @@
 #include "src/frames.h"
 #include "src/objects-inl.h"
 #include "src/objects/js-generator.h"
+#include "src/objects/smi.h"
 #include "src/runtime/runtime.h"
 #include "src/wasm/wasm-objects.h"
 
@@ -1071,7 +1072,7 @@ static void Generate_InterpreterEnterBytecode(MacroAssembler* masm) {
   // Set the return address to the correct point in the interpreter entry
   // trampoline.
   Label builtin_trampoline, trampoline_loaded;
-  Smi* interpreter_entry_return_pc_offset(
+  Smi interpreter_entry_return_pc_offset(
       masm->isolate()->heap()->interpreter_entry_return_pc_offset());
   DCHECK_NE(interpreter_entry_return_pc_offset, Smi::kZero);
 
@@ -1314,7 +1315,7 @@ void Builtins::Generate_InterpreterOnStackReplacement(MacroAssembler* masm) {
 
   // If the code object is null, just return to the caller.
   Label skip;
-  __ cmp(r0, Operand(Smi::kZero));
+  __ cmp(r0, Operand(Smi::zero()));
   __ b(ne, &skip);
   __ Ret();
 
@@ -1534,7 +1535,7 @@ static void EnterArgumentsAdaptorFrame(MacroAssembler* masm) {
   __ mov(r4, Operand(StackFrame::TypeToMarker(StackFrame::ARGUMENTS_ADAPTOR)));
   __ stm(db_w, sp, r0.bit() | r1.bit() | r4.bit() |
                        fp.bit() | lr.bit());
-  __ Push(Smi::kZero);  // Padding.
+  __ Push(Smi::zero());  // Padding.
   __ add(fp, sp,
          Operand(ArgumentsAdaptorFrameConstants::kFixedFrameSizeFromFp));
 }
@@ -2189,8 +2190,8 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
 void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
   // The function index was put in a register by the jump table trampoline.
   // Convert to Smi for the runtime call.
-  __ SmiTag(kWasmLazyCompileFuncIndexRegister,
-            kWasmLazyCompileFuncIndexRegister);
+  __ SmiTag(kWasmCompileLazyFuncIndexRegister,
+            kWasmCompileLazyFuncIndexRegister);
   {
     HardAbortScope hard_abort(masm);  // Avoid calls to Abort.
     FrameAndConstantPoolScope scope(masm, StackFrame::WASM_COMPILE_LAZY);
@@ -2208,13 +2209,13 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
     // Pass instance and function index as explicit arguments to the runtime
     // function.
     __ push(kWasmInstanceRegister);
-    __ push(kWasmLazyCompileFuncIndexRegister);
+    __ push(kWasmCompileLazyFuncIndexRegister);
     // Load the correct CEntry builtin from the instance object.
     __ ldr(r2, FieldMemOperand(kWasmInstanceRegister,
                                WasmInstanceObject::kCEntryStubOffset));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
-    __ Move(cp, Smi::kZero);
+    __ Move(cp, Smi::zero());
     __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, r2);
     // The entrypoint address is the return value.
     __ mov(r8, kReturnRegister0);

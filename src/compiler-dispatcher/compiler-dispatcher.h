@@ -101,58 +101,48 @@ class V8_EXPORT_PRIVATE CompilerDispatcher {
   // possible). Returns true if the compile job was successful.
   bool FinishNow(Handle<SharedFunctionInfo> function);
 
-  // Aborts a given job. Blocks if requested.
-  void Abort(Handle<SharedFunctionInfo> function, BlockingBehavior blocking);
+  // Aborts compilation job |job_id|.
+  void AbortJob(JobId job_id);
 
-  // Aborts all jobs. Blocks if requested.
-  void AbortAll(BlockingBehavior blocking);
-
-  // Memory pressure notifications from the embedder.
-  void MemoryPressureNotification(v8::MemoryPressureLevel level,
-                                  bool is_isolate_locked);
+  // Aborts all jobs, blocking until all jobs are aborted.
+  void AbortAll();
 
  private:
   FRIEND_TEST(CompilerDispatcherTest, IdleTaskNoIdleTime);
   FRIEND_TEST(CompilerDispatcherTest, IdleTaskSmallIdleTime);
   FRIEND_TEST(CompilerDispatcherTest, FinishNowWithWorkerTask);
+  FRIEND_TEST(CompilerDispatcherTest, AbortJobNotStarted);
+  FRIEND_TEST(CompilerDispatcherTest, AbortJobAlreadyStarted);
   FRIEND_TEST(CompilerDispatcherTest, AsyncAbortAllPendingWorkerTask);
   FRIEND_TEST(CompilerDispatcherTest, AsyncAbortAllRunningWorkerTask);
-  FRIEND_TEST(CompilerDispatcherTest, FinishNowDuringAbortAll);
   FRIEND_TEST(CompilerDispatcherTest, CompileMultipleOnBackgroundThread);
-
-  class AbortTask;
-  class WorkerTask;
-  class IdleTask;
 
   struct Job {
     explicit Job(BackgroundCompileTask* task_arg);
     ~Job();
 
-    bool IsReadyToFinalize(const base::LockGuard<base::Mutex>&) {
-      return has_run && !function.is_null();
+    bool IsReadyToFinalize(const base::MutexGuard&) {
+      return has_run && (!function.is_null() || aborted);
     }
 
     bool IsReadyToFinalize(base::Mutex* mutex) {
-      base::LockGuard<base::Mutex> lock(mutex);
+      base::MutexGuard lock(mutex);
       return IsReadyToFinalize(lock);
     }
 
     std::unique_ptr<BackgroundCompileTask> task;
     MaybeHandle<SharedFunctionInfo> function;
     bool has_run;
+    bool aborted;
   };
 
   typedef std::map<JobId, std::unique_ptr<Job>> JobMap;
   typedef IdentityMap<JobId, FreeStoreAllocationPolicy> SharedToJobIdMap;
 
-  bool CanEnqueue();
   void WaitForJobIfRunningOnBackground(Job* job);
-  void AbortInactiveJobs();
   JobMap::const_iterator GetJobFor(Handle<SharedFunctionInfo> shared) const;
   void ScheduleMoreWorkerTasksIfNeeded();
-  void ScheduleIdleTaskFromAnyThread();
-  void ScheduleIdleTaskIfNeeded();
-  void ScheduleAbortTask();
+  void ScheduleIdleTaskFromAnyThread(const base::MutexGuard&);
   void DoBackgroundWork();
   void DoIdleWork(double deadline_in_seconds);
   // Returns iterator to the inserted job.
@@ -183,15 +173,11 @@ class V8_EXPORT_PRIVATE CompilerDispatcher {
   // compilation's JobId;
   SharedToJobIdMap shared_to_unoptimized_job_id_;
 
-  base::AtomicValue<v8::MemoryPressureLevel> memory_pressure_level_;
-
   // The following members can be accessed from any thread. Methods need to hold
   // the mutex |mutex_| while accessing them.
   base::Mutex mutex_;
 
-  // True if the dispatcher is in the process of aborting running tasks.
-  bool abort_;
-
+  // True if an idle task is scheduled to be run.
   bool idle_task_scheduled_;
 
   // Number of scheduled or running WorkerTask objects.

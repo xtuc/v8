@@ -26,7 +26,7 @@
 #include "src/interpreter/interpreter.h"
 #include "src/isolate-inl.h"
 #include "src/log-inl.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/map.h"
 #include "src/optimized-compilation-info.h"
 #include "src/parsing/parse-info.h"
@@ -504,6 +504,9 @@ bool FinalizeUnoptimizedCode(
     UnoptimizedCompilationJobList* inner_function_jobs) {
   DCHECK(AllowCompilation::IsAllowed(isolate));
 
+  // TODO(rmcilroy): Clear native context in debug once AsmJS generates doesn't
+  // rely on accessing native context during finalization.
+
   // Allocate scope infos for the literal.
   DeclarationScope::AllocateScopeInfos(parse_info, isolate);
 
@@ -816,6 +819,23 @@ MaybeHandle<SharedFunctionInfo> FinalizeTopLevel(
 
   if (!script.is_null()) {
     script->set_compilation_state(Script::COMPILATION_STATE_COMPILED);
+  }
+
+  // Register any pending parallel tasks with the associated SFI.
+  if (parse_info->parallel_tasks()) {
+    CompilerDispatcher* dispatcher = parse_info->parallel_tasks()->dispatcher();
+    for (auto& it : *parse_info->parallel_tasks()) {
+      FunctionLiteral* literal = it.first;
+      CompilerDispatcher::JobId job_id = it.second;
+      MaybeHandle<SharedFunctionInfo> maybe_shared_for_task =
+          script->FindSharedFunctionInfo(isolate, literal);
+      Handle<SharedFunctionInfo> shared_for_task;
+      if (maybe_shared_for_task.ToHandle(&shared_for_task)) {
+        dispatcher->RegisterSharedFunctionInfo(job_id, *shared_for_task);
+      } else {
+        dispatcher->AbortJob(job_id);
+      }
+    }
   }
 
   return shared_info;

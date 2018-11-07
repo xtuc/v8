@@ -40,7 +40,9 @@ bool IsInitiallyMutable(Factory* factory, Address object_address) {
   V(api_private_symbol_table)             \
   V(api_symbol_table)                     \
   V(builtins_constants_table)             \
+  V(current_microtask)                    \
   V(detached_contexts)                    \
+  V(dirty_js_weak_factories)              \
   V(feedback_vectors_for_profiling_tools) \
   V(materialized_objects)                 \
   V(noscript_shared_function_infos)       \
@@ -48,7 +50,8 @@ bool IsInitiallyMutable(Factory* factory, Address object_address) {
   V(retained_maps)                        \
   V(retaining_path_targets)               \
   V(serialized_global_proxy_sizes)        \
-  V(serialized_objects)
+  V(serialized_objects)                   \
+  V(weak_refs_keep_during_job)
 
 #define TEST_CAN_BE_READ_ONLY(name) \
   if (factory->name().address() == object_address) return false;

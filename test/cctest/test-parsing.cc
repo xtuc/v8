@@ -79,6 +79,24 @@ TEST(IsContextualKeyword) {
   }
 }
 
+bool TokenIsAutoSemicolon(Token::Value token) {
+  switch (token) {
+    case Token::SEMICOLON:
+    case Token::EOS:
+    case Token::RBRACE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+TEST(AutoSemicolonToken) {
+  for (int i = 0; i < Token::NUM_TOKENS; i++) {
+    Token::Value token = static_cast<Token::Value>(i);
+    CHECK_EQ(TokenIsAutoSemicolon(token), Token::IsAutoSemicolon(token));
+  }
+}
+
 bool TokenIsAnyIdentifier(Token::Value token) {
   switch (token) {
     case Token::IDENTIFIER:
@@ -100,6 +118,31 @@ TEST(AnyIdentifierToken) {
   for (int i = 0; i < Token::NUM_TOKENS; i++) {
     Token::Value token = static_cast<Token::Value>(i);
     CHECK_EQ(TokenIsAnyIdentifier(token), Token::IsAnyIdentifier(token));
+  }
+}
+
+bool TokenIsCallable(Token::Value token) {
+  switch (token) {
+    case Token::SUPER:
+    case Token::IDENTIFIER:
+    case Token::ASYNC:
+    case Token::AWAIT:
+    case Token::YIELD:
+    case Token::LET:
+    case Token::STATIC:
+    case Token::FUTURE_STRICT_RESERVED_WORD:
+    case Token::ESCAPED_STRICT_RESERVED_WORD:
+    case Token::ENUM:
+      return true;
+    default:
+      return false;
+  }
+}
+
+TEST(CallableToken) {
+  for (int i = 0; i < Token::NUM_TOKENS; i++) {
+    Token::Value token = static_cast<Token::Value>(i);
+    CHECK_EQ(TokenIsCallable(token), Token::IsCallable(token));
   }
 }
 
@@ -331,6 +374,45 @@ TEST(IsUnaryOp) {
   }
 }
 
+bool TokenIsPropertyOrCall(Token::Value token) {
+  switch (token) {
+    case Token::TEMPLATE_SPAN:
+    case Token::TEMPLATE_TAIL:
+    case Token::PERIOD:
+    case Token::LBRACK:
+    case Token::LPAREN:
+      return true;
+    default:
+      return false;
+  }
+}
+
+TEST(IsPropertyOrCall) {
+  for (int i = 0; i < Token::NUM_TOKENS; i++) {
+    Token::Value token = static_cast<Token::Value>(i);
+    CHECK_EQ(TokenIsPropertyOrCall(token), Token::IsPropertyOrCall(token));
+  }
+}
+
+bool TokenIsProperty(Token::Value token) {
+  switch (token) {
+    case Token::TEMPLATE_SPAN:
+    case Token::TEMPLATE_TAIL:
+    case Token::PERIOD:
+    case Token::LBRACK:
+      return true;
+    default:
+      return false;
+  }
+}
+
+TEST(IsProperty) {
+  for (int i = 0; i < Token::NUM_TOKENS; i++) {
+    Token::Value token = static_cast<Token::Value>(i);
+    CHECK_EQ(TokenIsProperty(token), Token::IsProperty(token));
+  }
+}
+
 bool TokenIsCountOp(Token::Value token) {
   switch (token) {
     case Token::INC:
@@ -363,31 +445,6 @@ TEST(IsShiftOp) {
   for (int i = 0; i < Token::NUM_TOKENS; i++) {
     Token::Value token = static_cast<Token::Value>(i);
     CHECK_EQ(TokenIsShiftOp(token), Token::IsShiftOp(token));
-  }
-}
-
-bool TokenIsTrivialExpressionToken(Token::Value token) {
-  switch (token) {
-    case Token::SMI:
-    case Token::NUMBER:
-    case Token::BIGINT:
-    case Token::NULL_LITERAL:
-    case Token::TRUE_LITERAL:
-    case Token::FALSE_LITERAL:
-    case Token::STRING:
-    case Token::IDENTIFIER:
-    case Token::THIS:
-      return true;
-    default:
-      return false;
-  }
-}
-
-TEST(IsTrivialExpressionToken) {
-  for (int i = 0; i < Token::NUM_TOKENS; i++) {
-    Token::Value token = static_cast<Token::Value>(i);
-    CHECK_EQ(TokenIsTrivialExpressionToken(token),
-             Token::IsTrivialExpressionToken(token));
   }
 }
 
@@ -541,7 +598,8 @@ TEST(ScanHTMLEndComments) {
     i::PreParser::PreParseResult result = preparser.PreParseProgram();
     // Even in the case of a syntax error, kPreParseSuccess is returned.
     CHECK_EQ(i::PreParser::kPreParseSuccess, result);
-    CHECK(pending_error_handler.has_pending_error());
+    CHECK(pending_error_handler.has_pending_error() ||
+          pending_error_handler.has_error_unidentifiable_by_preparser());
   }
 }
 
@@ -648,7 +706,8 @@ TEST(StandAlonePreParserNoNatives) {
                            isolate->logger());
     i::PreParser::PreParseResult result = preparser.PreParseProgram();
     CHECK_EQ(i::PreParser::kPreParseSuccess, result);
-    CHECK(pending_error_handler.has_pending_error());
+    CHECK(pending_error_handler.has_pending_error() ||
+          pending_error_handler.has_error_unidentifiable_by_preparser());
   }
 }
 
@@ -682,7 +741,8 @@ TEST(RegressChromium62639) {
   i::PreParser::PreParseResult result = preparser.PreParseProgram();
   // Even in the case of a syntax error, kPreParseSuccess is returned.
   CHECK_EQ(i::PreParser::kPreParseSuccess, result);
-  CHECK(pending_error_handler.has_pending_error());
+  CHECK(pending_error_handler.has_pending_error() ||
+        pending_error_handler.has_error_unidentifiable_by_preparser());
 }
 
 
@@ -1385,7 +1445,6 @@ TEST(DiscardFunctionBody) {
     i::parsing::ParseProgram(&info, isolate);
     function = info.literal();
     CHECK_NOT_NULL(function);
-    CHECK_NOT_NULL(function->body());
     CHECK_EQ(1, function->body()->length());
     i::FunctionLiteral* inner =
         function->body()->first()->AsExpressionStatement()->expression()->
@@ -1401,7 +1460,7 @@ TEST(DiscardFunctionBody) {
       // TODO(conradw): This path won't be hit until the other test cases can be
       // uncommented.
       UNREACHABLE();
-      CHECK_NOT_NULL(inner->body());
+      CHECK(inner->ShouldEagerCompile());
       CHECK_GE(2, inner->body()->length());
       i::Expression* exp = inner->body()->at(1)->AsExpressionStatement()->
                            expression()->AsBinaryOperation()->right();
@@ -1415,7 +1474,7 @@ TEST(DiscardFunctionBody) {
               AsFunctionLiteral();
       }
     }
-    CHECK_NULL(fun->body());
+    CHECK(!fun->ShouldEagerCompile());
   }
 }
 
@@ -1541,7 +1600,8 @@ void TestParserSyncWithFlags(i::Handle<i::String> source,
           source->ToCString().get(), message_string->ToCString().get());
     }
 
-    if (test_preparser && !pending_error_handler.has_pending_error()) {
+    if (test_preparser && !pending_error_handler.has_pending_error() &&
+        !pending_error_handler.has_error_unidentifiable_by_preparser()) {
       FATAL(
           "Parser failed on:\n"
           "\t%s\n"
@@ -1553,7 +1613,7 @@ void TestParserSyncWithFlags(i::Handle<i::String> source,
     // Check that preparser and parser produce the same error, except for cases
     // where we do not track errors in the preparser.
     if (test_preparser && !ignore_error_msg &&
-        !pending_error_handler.ErrorUnidentifiableByPreParser()) {
+        !pending_error_handler.has_error_unidentifiable_by_preparser()) {
       i::Handle<i::String> preparser_message =
           pending_error_handler.FormatErrorMessageForTest(CcTest::i_isolate());
       if (!i::String::Equals(isolate, message_string, preparser_message)) {
@@ -4975,6 +5035,8 @@ TEST(StaticClassFieldsNoErrors) {
     "static 'a' = 0;",
     "static 'a';",
 
+    "static c = [c] = c",
+
     // ASI
     "static a = 0\n",
     "static a = 0\n b",
@@ -5064,6 +5126,8 @@ TEST(ClassFieldsNoErrors) {
     "0;",
     "'a' = 0;",
     "'a';",
+
+    "c = [c] = c",
 
     // ASI
     "a = 0\n",
@@ -5218,6 +5282,8 @@ TEST(StaticClassFieldsErrors) {
     "static a b",
     "static a = 0 b",
 
+    "static c = [1] = [c]",
+
     // ASI requires that the next token is not part of any legal production
     "static a = 0\n *b(){}",
     "static a = 0\n ['b'](){}",
@@ -5265,6 +5331,8 @@ TEST(ClassFieldsErrors) {
     // ASI requires a linebreak
     "a b",
     "a = 0 b",
+
+    "c = [1] = [c]",
 
     // ASI requires that the next token is not part of any legal production
     "a = 0\n *b(){}",
@@ -6574,6 +6642,41 @@ TEST(BasicImportExportParsing) {
   }
 }
 
+TEST(NamespaceExportParsing) {
+  // clang-format off
+  const char* kSources[] = {
+      "export * as arguments from 'bar'",
+      "export * as await from 'bar'",
+      "export * as default from 'bar'",
+      "export * as enum from 'bar'",
+      "export * as foo from 'bar'",
+      "export * as for from 'bar'",
+      "export * as let from 'bar'",
+      "export * as static from 'bar'",
+      "export * as yield from 'bar'",
+  };
+  // clang-format on
+
+  i::FLAG_harmony_namespace_exports = true;
+  i::Isolate* isolate = CcTest::i_isolate();
+  i::Factory* factory = isolate->factory();
+
+  v8::HandleScope handles(CcTest::isolate());
+  v8::Local<v8::Context> context = v8::Context::New(CcTest::isolate());
+  v8::Context::Scope context_scope(context);
+
+  isolate->stack_guard()->SetStackLimit(i::GetCurrentStackPosition() -
+                                        128 * 1024);
+
+  for (unsigned i = 0; i < arraysize(kSources); ++i) {
+    i::Handle<i::String> source =
+        factory->NewStringFromAsciiChecked(kSources[i]);
+    i::Handle<i::Script> script = factory->NewScript(source);
+    i::ParseInfo info(isolate, script);
+    info.set_module();
+    CHECK(i::parsing::ParseProgram(&info, isolate));
+  }
+}
 
 TEST(ImportExportParsingErrors) {
   // clang-format off
@@ -6639,6 +6742,13 @@ TEST(ImportExportParsingErrors) {
       "import * as x, * as y from 'm.js';",
       "import {x}, {y} from 'm.js';",
       "import * as x, {y} from 'm.js';",
+
+      "export *;",
+      "export * as;",
+      "export * as foo;",
+      "export * as foo from;",
+      "export * as foo from ';",
+      "export * as ,foo from 'bar'",
   };
   // clang-format on
 

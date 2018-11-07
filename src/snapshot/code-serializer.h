@@ -42,7 +42,7 @@ class ScriptData {
   DISALLOW_COPY_AND_ASSIGN(ScriptData);
 };
 
-class CodeSerializer : public Serializer<> {
+class CodeSerializer : public Serializer {
  public:
   static ScriptCompiler::CachedData* Serialize(Handle<SharedFunctionInfo> info);
 
@@ -79,7 +79,7 @@ class CodeSerializer : public Serializer<> {
   bool SerializeReadOnlyObject(HeapObject* obj, HowToCode how_to_code,
                                WhereToPoint where_to_point, int skip);
 
-  DisallowHeapAllocation no_gc_;
+  DISALLOW_HEAP_ALLOCATION(no_gc_);
   uint32_t source_hash_;
   std::vector<uint32_t> stub_keys_;
   DISALLOW_COPY_AND_ASSIGN(CodeSerializer);

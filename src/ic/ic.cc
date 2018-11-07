@@ -294,9 +294,8 @@ void IC::UpdateState(Handle<Object> receiver, Handle<Object> name) {
   }
 }
 
-
-MaybeHandle<Object> IC::TypeError(MessageTemplate::Template index,
-                                  Handle<Object> object, Handle<Object> key) {
+MaybeHandle<Object> IC::TypeError(MessageTemplate index, Handle<Object> object,
+                                  Handle<Object> key) {
   HandleScope scope(isolate());
   THROW_NEW_ERROR(isolate(), NewTypeError(index, key, object), Object);
 }
@@ -448,7 +447,7 @@ MaybeHandle<Object> LoadIC::Load(Handle<Object> object, Handle<Name> name) {
   LookupForRead(isolate(), &it);
 
   if (name->IsPrivate()) {
-    if (name->IsPrivateField() && !it.IsFound()) {
+    if (name->IsPrivateName() && !it.IsFound()) {
       return TypeError(MessageTemplate::kInvalidPrivateFieldAccess, object,
                        name);
     }
@@ -1412,7 +1411,7 @@ MaybeHandle<Object> StoreIC::Store(Handle<Object> object, Handle<Name> name,
   bool use_ic = FLAG_use_ic;
 
   if (name->IsPrivate()) {
-    if (name->IsPrivateField() && !it.IsFound()) {
+    if (name->IsPrivateName() && !it.IsFound()) {
       return TypeError(MessageTemplate::kInvalidPrivateFieldAccess, object,
                        name);
     }
@@ -2467,7 +2466,7 @@ static bool CanFastCloneObject(Handle<Map> map) {
     PropertyDetails details = descriptors->GetDetails(i);
     Name* key = descriptors->GetKey(i);
     if (details.kind() != kData || !details.IsEnumerable() ||
-        key->IsPrivateField()) {
+        key->IsPrivateName()) {
       return false;
     }
   }

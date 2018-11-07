@@ -56,10 +56,10 @@ FEATURE_FLAGS = {
   'Symbol.prototype.description': '--harmony-symbol-description',
   'globalThis': '--harmony-global',
   'well-formed-json-stringify': '--harmony-json-stringify',
+  'export-star-as-namespace-from-module': '--harmony-namespace-exports',
 }
 
 SKIPPED_FEATURES = set(['Object.fromEntries',
-                        'export-star-as-namespace-from-module',
                         'class-fields-private',
                         'class-static-fields-private',
                         'class-methods-private',
@@ -185,7 +185,8 @@ class TestCase(testcase.D8TestCase):
          if "detachArrayBuffer.js" in self.test_record.get("includes", [])
          else []) +
         [flag for (feature, flag) in FEATURE_FLAGS.items()
-          if feature in self.test_record.get("features", [])]
+          if feature in self.test_record.get("features", [])] +
+        ["--no-arguments"]  # disable top-level arguments in d8
     )
 
   def _get_includes(self):

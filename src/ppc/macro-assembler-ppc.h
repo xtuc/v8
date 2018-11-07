@@ -7,6 +7,7 @@
 
 #include "src/assembler.h"
 #include "src/bailout-reason.h"
+#include "src/contexts.h"
 #include "src/double.h"
 #include "src/globals.h"
 #include "src/ppc/assembler-ppc.h"
@@ -167,10 +168,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   static int ActivationFrameAlignment();
 
   void InitializeRootRegister() {
-    ExternalReference roots_array_start =
-        ExternalReference::roots_array_start(isolate());
-    mov(kRootRegister, Operand(roots_array_start));
-    addi(kRootRegister, kRootRegister, Operand(kRootRegisterBias));
+    ExternalReference isolate_root = ExternalReference::isolate_root(isolate());
+    mov(kRootRegister, Operand(isolate_root));
   }
 
   // These exist to provide portability between 32 and 64bit
@@ -188,7 +187,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // load a literal signed int value <value> to GPR <dst>
   void LoadIntLiteral(Register dst, int value);
   // load an SMI value <value> to GPR <dst>
-  void LoadSmiLiteral(Register dst, Smi* smi);
+  void LoadSmiLiteral(Register dst, Smi smi);
 
   void LoadSingle(DoubleRegister dst, const MemOperand& mem,
                   Register scratch = no_reg);
@@ -223,7 +222,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Push(Register src) { push(src); }
   // Push a handle.
   void Push(Handle<HeapObject> handle);
-  void Push(Smi* smi);
+  void Push(Smi smi);
 
   // Push two registers.  Pushes leftmost register first (to highest address).
   void Push(Register src1, Register src2) {
@@ -299,6 +298,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void CallRecordWriteStub(Register object, Register address,
                            RememberedSetAction remembered_set_action,
                            SaveFPRegsMode fp_mode);
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Address wasm_target);
 
   void MultiPush(RegList regs, Register location = sp);
   void MultiPop(RegList regs, Register location = sp);
@@ -486,7 +488,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void MovIntToFloat(DoubleRegister dst, Register src);
   void MovFloatToInt(Register dst, DoubleRegister src);
   // Register move. May do nothing if the registers are identical.
-  void Move(Register dst, Smi* smi) { LoadSmiLiteral(dst, smi); }
+  void Move(Register dst, Smi smi) { LoadSmiLiteral(dst, smi); }
   void Move(Register dst, Handle<HeapObject> value);
   void Move(Register dst, ExternalReference reference);
   void Move(Register dst, Register src, Condition cond = al);
@@ -660,6 +662,10 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
                                 int num_double_arguments);
   void CallCFunctionHelper(Register function, int num_reg_arguments,
                            int num_double_arguments);
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Handle<Code> code_target,
+                           Address wasm_target);
 };
 
 // MacroAssembler implements a collection of frequently used acros.
@@ -781,16 +787,14 @@ class MacroAssembler : public TurboAssembler {
   void Or(Register ra, Register rs, const Operand& rb, RCBit rc = LeaveRC);
   void Xor(Register ra, Register rs, const Operand& rb, RCBit rc = LeaveRC);
 
-  void AddSmiLiteral(Register dst, Register src, Smi* smi, Register scratch);
-  void SubSmiLiteral(Register dst, Register src, Smi* smi, Register scratch);
-  void CmpSmiLiteral(Register src1, Smi* smi, Register scratch,
+  void AddSmiLiteral(Register dst, Register src, Smi smi, Register scratch);
+  void SubSmiLiteral(Register dst, Register src, Smi smi, Register scratch);
+  void CmpSmiLiteral(Register src1, Smi smi, Register scratch,
                      CRegister cr = cr7);
-  void CmplSmiLiteral(Register src1, Smi* smi, Register scratch,
+  void CmplSmiLiteral(Register src1, Smi smi, Register scratch,
                       CRegister cr = cr7);
-  void AndSmiLiteral(Register dst, Register src, Smi* smi, Register scratch,
+  void AndSmiLiteral(Register dst, Register src, Smi smi, Register scratch,
                      RCBit rc = LeaveRC);
-
-
 
   // ---------------------------------------------------------------------------
   // JavaScript invokes

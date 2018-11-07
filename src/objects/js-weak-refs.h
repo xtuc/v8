@@ -6,6 +6,7 @@
 #define V8_OBJECTS_JS_WEAK_REFS_H_
 
 #include "src/objects/js-objects.h"
+#include "src/objects/microtask.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -23,6 +24,7 @@ class JSWeakFactory : public JSObject {
   DECL_VERIFIER(JSWeakFactory)
   DECL_CAST(JSWeakFactory)
 
+  DECL_ACCESSORS(native_context, Context)
   DECL_ACCESSORS(cleanup, Object)
   DECL_ACCESSORS(active_cells, Object)
   DECL_ACCESSORS(cleared_cells, Object)
@@ -30,18 +32,31 @@ class JSWeakFactory : public JSObject {
   // For storing a list of JSWeakFactory objects in NativeContext.
   DECL_ACCESSORS(next, Object)
 
+  DECL_INT_ACCESSORS(flags)
+
+  // Adds a newly constructed JSWeakCell object into this JSWeakFactory.
+  inline void AddWeakCell(JSWeakCell* weak_cell);
+
   // Returns true if the cleared_cells list is non-empty.
   inline bool NeedsCleanup() const;
+
+  inline bool scheduled_for_cleanup() const;
+  inline void set_scheduled_for_cleanup(bool scheduled_for_cleanup);
 
   // Get and remove the first cleared JSWeakCell from the cleared_cells
   // list. (Assumes there is one.)
   inline JSWeakCell* PopClearedCell(Isolate* isolate);
 
-  static const int kCleanupOffset = JSObject::kHeaderSize;
+  static const int kNativeContextOffset = JSObject::kHeaderSize;
+  static const int kCleanupOffset = kNativeContextOffset + kPointerSize;
   static const int kActiveCellsOffset = kCleanupOffset + kPointerSize;
   static const int kClearedCellsOffset = kActiveCellsOffset + kPointerSize;
   static const int kNextOffset = kClearedCellsOffset + kPointerSize;
-  static const int kSize = kNextOffset + kPointerSize;
+  static const int kFlagsOffset = kNextOffset + kPointerSize;
+  static const int kSize = kFlagsOffset + kPointerSize;
+
+  // Bitfields in flags.
+  class ScheduledForCleanupField : public BitField<bool, 0, 1> {};
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakFactory);
@@ -54,8 +69,9 @@ class JSWeakCell : public JSObject {
   DECL_VERIFIER(JSWeakCell)
   DECL_CAST(JSWeakCell)
 
-  DECL_ACCESSORS(factory, JSWeakFactory)
+  DECL_ACCESSORS(factory, Object)
   DECL_ACCESSORS(target, Object)
+  DECL_ACCESSORS(holdings, Object)
 
   // For storing doubly linked lists of JSWeakCells in JSWeakFactory.
   DECL_ACCESSORS(prev, Object)
@@ -63,7 +79,8 @@ class JSWeakCell : public JSObject {
 
   static const int kFactoryOffset = JSObject::kHeaderSize;
   static const int kTargetOffset = kFactoryOffset + kPointerSize;
-  static const int kPrevOffset = kTargetOffset + kPointerSize;
+  static const int kHoldingsOffset = kTargetOffset + kPointerSize;
+  static const int kPrevOffset = kHoldingsOffset + kPointerSize;
   static const int kNextOffset = kPrevOffset + kPointerSize;
   static const int kSize = kNextOffset + kPointerSize;
 
@@ -75,11 +92,35 @@ class JSWeakCell : public JSObject {
   // since it's disabled before GC.
   inline void Nullify(
       Isolate* isolate,
-      std::function<void(HeapObject* object, Object** slot, Object* target)>
+      std::function<void(HeapObject* object, ObjectSlot slot, Object* target)>
           gc_notify_updated_slot);
+
+  inline void Clear(Isolate* isolate);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakCell);
+};
+
+class JSWeakRef : public JSWeakCell {
+ public:
+  DECL_CAST(JSWeakRef)
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakRef);
+};
+
+class WeakFactoryCleanupJobTask : public Microtask {
+ public:
+  DECL_ACCESSORS(factory, JSWeakFactory)
+
+  DECL_CAST(WeakFactoryCleanupJobTask)
+  DECL_VERIFIER(WeakFactoryCleanupJobTask)
+  DECL_PRINTER(WeakFactoryCleanupJobTask)
+
+  static const int kFactoryOffset = Microtask::kHeaderSize;
+  static const int kSize = kFactoryOffset + kPointerSize;
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(WeakFactoryCleanupJobTask);
 };
 
 class JSWeakFactoryCleanupIterator : public JSObject {
@@ -95,18 +136,6 @@ class JSWeakFactoryCleanupIterator : public JSObject {
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakFactoryCleanupIterator);
-};
-
-class JSWeakFactoryCleanupTask : public v8::Task {
- public:
-  inline explicit JSWeakFactoryCleanupTask(Isolate* isolate);
-  void Run() override;
-
- private:
-  v8::Persistent<v8::Context> native_context_;
-  Isolate* isolate_;
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakFactoryCleanupTask);
 };
 
 }  // namespace internal

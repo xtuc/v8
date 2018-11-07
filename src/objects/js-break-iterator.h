@@ -9,6 +9,9 @@
 #ifndef V8_OBJECTS_JS_BREAK_ITERATOR_H_
 #define V8_OBJECTS_JS_BREAK_ITERATOR_H_
 
+#include <set>
+#include <string>
+
 #include "src/objects.h"
 #include "src/objects/intl-objects.h"
 #include "src/objects/managed.h"
@@ -26,15 +29,26 @@ namespace internal {
 class JSV8BreakIterator : public JSObject {
  public:
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSV8BreakIterator> Initialize(
-      Isolate* isolate, Handle<JSV8BreakIterator> break_iterator_holder,
+      Isolate* isolate, Handle<JSV8BreakIterator> break_iterator,
       Handle<Object> input_locales, Handle<Object> input_options);
 
   static Handle<JSObject> ResolvedOptions(
       Isolate* isolate, Handle<JSV8BreakIterator> break_iterator);
 
+  static std::set<std::string> GetAvailableLocales();
+
   static void AdoptText(Isolate* isolate,
-                        Handle<JSV8BreakIterator> break_iterator_holder,
+                        Handle<JSV8BreakIterator> break_iterator,
                         Handle<String> text);
+
+  static Handle<Object> Current(Isolate* isolate,
+                                Handle<JSV8BreakIterator> break_iterator);
+  static Handle<Object> First(Isolate* isolate,
+                              Handle<JSV8BreakIterator> break_iterator);
+  static Handle<Object> Next(Isolate* isolate,
+                             Handle<JSV8BreakIterator> break_iterator);
+  static String* BreakType(Isolate* isolate,
+                           Handle<JSV8BreakIterator> break_iterator);
 
   enum class Type { CHARACTER, WORD, SENTENCE, LINE, COUNT };
   inline void set_type(Type type);
@@ -74,8 +88,6 @@ class JSV8BreakIterator : public JSObject {
 #undef BREAK_ITERATOR_FIELDS
 
  private:
-  static Type getType(const char* str);
-
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSV8BreakIterator)
 };
 

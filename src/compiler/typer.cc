@@ -34,13 +34,13 @@ class Typer::Decorator final : public GraphDecorator {
   Typer* const typer_;
 };
 
-Typer::Typer(JSHeapBroker* js_heap_broker, Flags flags, Graph* graph)
+Typer::Typer(JSHeapBroker* broker, Flags flags, Graph* graph)
     : flags_(flags),
       graph_(graph),
       decorator_(nullptr),
       cache_(TypeCache::Get()),
-      js_heap_broker_(js_heap_broker),
-      operation_typer_(js_heap_broker, zone()) {
+      broker_(broker),
+      operation_typer_(broker, zone()) {
   singleton_false_ = operation_typer_.singleton_false();
   singleton_true_ = operation_typer_.singleton_true();
 
@@ -406,10 +406,12 @@ Type Typer::Visitor::BinaryNumberOpTyper(Type lhs, Type rhs, Typer* t,
   if (lhs_is_number && rhs_is_number) {
     return f(lhs, rhs, t);
   }
-  if (lhs_is_number || rhs_is_number) {
+  // In order to maintain monotonicity, the following two conditions are
+  // intentionally asymmetric.
+  if (lhs_is_number) {
     return Type::Number();
   }
-  if (lhs.Is(Type::BigInt()) || rhs.Is(Type::BigInt())) {
+  if (lhs.Is(Type::BigInt())) {
     return Type::BigInt();
   }
   return Type::Numeric();
@@ -1163,6 +1165,10 @@ Type Typer::Visitor::TypeJSCreateArrayIterator(Node* node) {
   return Type::OtherObject();
 }
 
+Type Typer::Visitor::TypeJSCreateAsyncFunctionObject(Node* node) {
+  return Type::OtherObject();
+}
+
 Type Typer::Visitor::TypeJSCreateCollectionIterator(Node* node) {
   return Type::OtherObject();
 }
@@ -1433,7 +1439,6 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     // Unary math functions.
     case BuiltinFunctionId::kMathAbs:
     case BuiltinFunctionId::kMathExp:
-    case BuiltinFunctionId::kMathExpm1:
       return Type::Union(Type::PlainNumber(), Type::NaN(), t->zone());
     case BuiltinFunctionId::kMathAcos:
     case BuiltinFunctionId::kMathAcosh:
@@ -1443,6 +1448,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kMathAtanh:
     case BuiltinFunctionId::kMathCbrt:
     case BuiltinFunctionId::kMathCos:
+    case BuiltinFunctionId::kMathExpm1:
     case BuiltinFunctionId::kMathFround:
     case BuiltinFunctionId::kMathLog:
     case BuiltinFunctionId::kMathLog1p:
@@ -1621,6 +1627,21 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
       return Type::Boolean();
     case BuiltinFunctionId::kObjectToString:
       return Type::String();
+
+    case BuiltinFunctionId::kPromiseAll:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromisePrototypeCatch:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromisePrototypeFinally:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromisePrototypeThen:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromiseRace:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromiseReject:
+      return Type::Receiver();
+    case BuiltinFunctionId::kPromiseResolve:
+      return Type::Receiver();
 
     // RegExp functions.
     case BuiltinFunctionId::kRegExpCompile:
@@ -1989,6 +2010,11 @@ Type Typer::Visitor::TypeCheckReceiver(Node* node) {
   return Type::Intersect(arg, Type::Receiver(), zone());
 }
 
+Type Typer::Visitor::TypeCheckReceiverOrNullOrUndefined(Node* node) {
+  Type arg = Operand(node, 0);
+  return Type::Intersect(arg, Type::ReceiverOrNullOrUndefined(), zone());
+}
+
 Type Typer::Visitor::TypeCheckSmi(Node* node) {
   Type arg = Operand(node, 0);
   return Type::Intersect(arg, Type::SignedSmall(), zone());
@@ -2211,7 +2237,7 @@ Type Typer::Visitor::TypeRuntimeAbort(Node* node) { UNREACHABLE(); }
 // Heap constants.
 
 Type Typer::Visitor::TypeConstant(Handle<Object> value) {
-  return Type::NewConstant(typer_->js_heap_broker(), value, zone());
+  return Type::NewConstant(typer_->broker(), value, zone());
 }
 
 }  // namespace compiler

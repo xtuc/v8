@@ -26,6 +26,7 @@ class AccountingAllocator;
 class AstRawString;
 class AstStringConstants;
 class AstValueFactory;
+class CompilerDispatcher;
 class DeclarationScope;
 class FunctionLiteral;
 class RuntimeCallStats;
@@ -89,9 +90,9 @@ class V8_EXPORT_PRIVATE ParseInfo {
                 set_wrapped_as_function)
   FLAG_ACCESSOR(kAllowEvalCache, allow_eval_cache, set_allow_eval_cache)
   FLAG_ACCESSOR(kIsDeclaration, is_declaration, set_declaration)
-  FLAG_ACCESSOR(kRequiresInstanceFieldsInitializer,
-                requires_instance_fields_initializer,
-                set_requires_instance_fields_initializer);
+  FLAG_ACCESSOR(kRequiresInstanceMembersInitializer,
+                requires_instance_members_initializer,
+                set_requires_instance_members_initializer);
 #undef FLAG_ACCESSOR
 
   void set_parse_restriction(ParseRestriction restriction) {
@@ -205,6 +206,31 @@ class V8_EXPORT_PRIVATE ParseInfo {
     return &pending_error_handler_;
   }
 
+  class ParallelTasks {
+   public:
+    explicit ParallelTasks(CompilerDispatcher* compiler_dispatcher)
+        : dispatcher_(compiler_dispatcher) {
+      DCHECK(dispatcher_);
+    }
+
+    void Enqueue(ParseInfo* outer_parse_info, const AstRawString* function_name,
+                 FunctionLiteral* literal);
+
+    typedef std::forward_list<std::pair<FunctionLiteral*, uintptr_t>>::iterator
+        EnqueuedJobsIterator;
+
+    EnqueuedJobsIterator begin() { return enqueued_jobs_.begin(); }
+    EnqueuedJobsIterator end() { return enqueued_jobs_.end(); }
+
+    CompilerDispatcher* dispatcher() { return dispatcher_; }
+
+   private:
+    CompilerDispatcher* dispatcher_;
+    std::forward_list<std::pair<FunctionLiteral*, uintptr_t>> enqueued_jobs_;
+  };
+
+  ParallelTasks* parallel_tasks() { return parallel_tasks_.get(); }
+
   //--------------------------------------------------------------------------
   // TODO(titzer): these should not be part of ParseInfo.
   //--------------------------------------------------------------------------
@@ -257,7 +283,7 @@ class V8_EXPORT_PRIVATE ParseInfo {
     kWrappedAsFunction = 1 << 14,  // Implicitly wrapped as function.
     kAllowEvalCache = 1 << 15,
     kIsDeclaration = 1 << 16,
-    kRequiresInstanceFieldsInitializer = 1 << 17,
+    kRequiresInstanceMembersInitializer = 1 << 17,
   };
 
   //------------- Inputs to parsing and scope analysis -----------------------
@@ -289,6 +315,7 @@ class V8_EXPORT_PRIVATE ParseInfo {
   RuntimeCallStats* runtime_call_stats_;
   Logger* logger_;
   SourceRangeMap* source_range_map_;  // Used when block coverage is enabled.
+  std::unique_ptr<ParallelTasks> parallel_tasks_;
 
   //----------- Output of parsing and scope analysis ------------------------
   FunctionLiteral* literal_;

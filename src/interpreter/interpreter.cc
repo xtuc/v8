@@ -17,6 +17,7 @@
 #include "src/log.h"
 #include "src/objects-inl.h"
 #include "src/objects/shared-function-info.h"
+#include "src/objects/slots.h"
 #include "src/parsing/parse-info.h"
 #include "src/setup-isolate.h"
 #include "src/snapshot/snapshot.h"
@@ -73,26 +74,11 @@ int BuiltinIndexFromBytecode(Bytecode bytecode, OperandScale operand_scale) {
 
 }  // namespace
 
-Code* Interpreter::GetAndMaybeDeserializeBytecodeHandler(
-    Bytecode bytecode, OperandScale operand_scale) {
+Code* Interpreter::GetBytecodeHandler(Bytecode bytecode,
+                                      OperandScale operand_scale) {
   int builtin_index = BuiltinIndexFromBytecode(bytecode, operand_scale);
   Builtins* builtins = isolate_->builtins();
-  Code* code = builtins->builtin(builtin_index);
-
-  // Already deserialized? Then just return the handler.
-  if (!Builtins::IsLazyDeserializer(code)) return code;
-
-  DCHECK(FLAG_lazy_deserialization);
-  DCHECK(Bytecodes::BytecodeHasHandler(bytecode, operand_scale));
-  code = Snapshot::DeserializeBuiltin(isolate_, builtin_index);
-
-  DCHECK(code->IsCode());
-  DCHECK_EQ(code->kind(), Code::BYTECODE_HANDLER);
-  DCHECK(!Builtins::IsLazyDeserializer(code));
-
-  SetBytecodeHandler(bytecode, operand_scale, code);
-
-  return code;
+  return builtins->builtin(builtin_index);
 }
 
 void Interpreter::SetBytecodeHandler(Bytecode bytecode,
@@ -113,17 +99,32 @@ size_t Interpreter::GetDispatchTableIndex(Bytecode bytecode,
 }
 
 void Interpreter::IterateDispatchTable(RootVisitor* v) {
+  if (FLAG_embedded_builtins && !isolate_->serializer_enabled() &&
+      isolate_->embedded_blob() != nullptr) {
+// If builtins are embedded (and we're not generating a snapshot), then
+// every bytecode handler will be off-heap, so there's no point iterating
+// over them.
+#ifdef DEBUG
+    for (int i = 0; i < kDispatchTableSize; i++) {
+      Address code_entry = dispatch_table_[i];
+      CHECK(code_entry == kNullAddress ||
+            InstructionStream::PcIsOffHeap(isolate_, code_entry));
+    }
+#endif  // ENABLE_SLOW_DCHECKS
+    return;
+  }
+
   for (int i = 0; i < kDispatchTableSize; i++) {
     Address code_entry = dispatch_table_[i];
 
-    // If the handler is embedded, it is immovable.
+    // Skip over off-heap bytecode handlers since they will never move.
     if (InstructionStream::PcIsOffHeap(isolate_, code_entry)) continue;
 
     Object* code = code_entry == kNullAddress
                        ? nullptr
                        : Code::GetCodeFromTargetAddress(code_entry);
     Object* old_code = code;
-    v->VisitRootPointer(Root::kDispatchTable, nullptr, &code);
+    v->VisitRootPointer(Root::kDispatchTable, nullptr, ObjectSlot(&code));
     if (code != old_code) {
       dispatch_table_[i] = reinterpret_cast<Code*>(code)->entry();
     }

@@ -9,6 +9,7 @@
 #include "src/objects.h"
 #include "src/objects/builtin-function-id.h"
 #include "src/objects/script.h"
+#include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -32,7 +33,7 @@ class PreParsedScopeData : public HeapObject {
   inline void set_child_data(int index, Object* value,
                              WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  inline Object** child_data_start() const;
+  inline ObjectSlot child_data_start() const;
 
   // Clear uninitialized padding space.
   inline void clear_padding();
@@ -174,7 +175,7 @@ class InterpreterData : public Struct {
 // shared by multiple instances of the function.
 class SharedFunctionInfo : public HeapObject, public NeverReadOnlySpaceObject {
  public:
-  static constexpr Object* const kNoSharedNameSentinel = Smi::kZero;
+  static constexpr ObjectPtr const kNoSharedNameSentinel = Smi::kZero;
 
   // [name]: Returns shared name if it exists or an empty string otherwise.
   inline String* Name() const;
@@ -474,7 +475,7 @@ class SharedFunctionInfo : public HeapObject, public NeverReadOnlySpaceObject {
   // initializer. This flag is set when creating the
   // SharedFunctionInfo as a reminder to emit the initializer call
   // when generating code later.
-  DECL_BOOLEAN_ACCESSORS(requires_instance_fields_initializer)
+  DECL_BOOLEAN_ACCESSORS(requires_instance_members_initializer)
 
   // [source code]: Source code for the function.
   bool HasSourceCode() const;
@@ -568,7 +569,7 @@ class SharedFunctionInfo : public HeapObject, public NeverReadOnlySpaceObject {
     Script::Iterator script_iterator_;
     WeakArrayList::Iterator noscript_sfi_iterator_;
     SharedFunctionInfo::ScriptIterator sfi_iterator_;
-    DisallowHeapAllocation no_gc_;
+    DISALLOW_HEAP_ALLOCATION(no_gc_);
     DISALLOW_COPY_AND_ASSIGN(GlobalIterator);
   };
 
@@ -633,7 +634,7 @@ class SharedFunctionInfo : public HeapObject, public NeverReadOnlySpaceObject {
   V(IsAsmWasmBrokenBit, bool, 1, _)                      \
   V(FunctionMapIndexBits, int, 5, _)                     \
   V(DisabledOptimizationReasonBits, BailoutReason, 4, _) \
-  V(RequiresInstanceFieldsInitializer, bool, 1, _)       \
+  V(RequiresInstanceMembersInitializer, bool, 1, _)      \
   V(ConstructAsBuiltinBit, bool, 1, _)                   \
   V(IsAnonymousExpressionBit, bool, 1, _)                \
   V(NameShouldPrintAsAnonymousBit, bool, 1, _)           \

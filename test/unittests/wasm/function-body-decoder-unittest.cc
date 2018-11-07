@@ -1798,22 +1798,22 @@ TEST_F(FunctionBodyDecoderTest, AllSetGlobalCombinations) {
   }
 }
 
-TEST_F(FunctionBodyDecoderTest, WasmGrowMemory) {
+TEST_F(FunctionBodyDecoderTest, WasmMemoryGrow) {
   TestModuleBuilder builder;
   module = builder.module();
   builder.InitializeMemory();
 
-  byte code[] = {WASM_GET_LOCAL(0), kExprGrowMemory, 0};
+  byte code[] = {WASM_GET_LOCAL(0), kExprMemoryGrow, 0};
   EXPECT_VERIFIES_C(i_i, code);
   EXPECT_FAILURE_C(i_d, code);
 }
 
-TEST_F(FunctionBodyDecoderTest, AsmJsGrowMemory) {
+TEST_F(FunctionBodyDecoderTest, AsmJsMemoryGrow) {
   TestModuleBuilder builder(kAsmJsOrigin);
   module = builder.module();
   builder.InitializeMemory();
 
-  byte code[] = {WASM_GET_LOCAL(0), kExprGrowMemory, 0};
+  byte code[] = {WASM_GET_LOCAL(0), kExprMemoryGrow, 0};
   EXPECT_FAILURE_C(i_i, code);
 }
 
@@ -2430,6 +2430,7 @@ TEST_F(FunctionBodyDecoderTest, ThrowUnreachable) {
 
 #define WASM_TRY_OP kExprTry, kLocalVoid
 #define WASM_CATCH(index) kExprCatch, static_cast<byte>(index)
+#define WASM_RETHROW(depth) kExprRethrow, static_cast<byte>(depth)
 
 TEST_F(FunctionBodyDecoderTest, TryCatch) {
   WASM_FEATURE_SCOPE(eh);
@@ -2460,8 +2461,26 @@ TEST_F(FunctionBodyDecoderTest, TryCatchAll) {
   EXPECT_FAILURE(v_v, kExprCatchAll, kExprEnd);     // Missing try.
 }
 
+TEST_F(FunctionBodyDecoderTest, Rethrow) {
+  WASM_FEATURE_SCOPE(eh);
+  TestModuleBuilder builder;
+  module = builder.module();
+  byte ex1 = builder.AddException(sigs.v_v());
+  EXPECT_VERIFIES(v_v, WASM_TRY_OP, WASM_CATCH(ex1), WASM_RETHROW(0), kExprEnd);
+  EXPECT_VERIFIES(v_v, WASM_TRY_OP, kExprCatchAll, WASM_RETHROW(0), kExprEnd);
+  EXPECT_VERIFIES(v_v, WASM_TRY_OP, kExprCatchAll, WASM_BLOCK(WASM_RETHROW(1)),
+                  kExprEnd);
+  EXPECT_FAILURE(v_v, WASM_TRY_OP, kExprCatchAll, WASM_BLOCK(WASM_RETHROW(0)),
+                 kExprEnd);
+  EXPECT_FAILURE(v_v, WASM_TRY_OP, kExprCatchAll, WASM_RETHROW(23), kExprEnd);
+  EXPECT_FAILURE(v_v, WASM_TRY_OP, WASM_RETHROW(0), kExprCatchAll, kExprEnd);
+  EXPECT_FAILURE(v_v, WASM_BLOCK(WASM_RETHROW(0)));
+  EXPECT_FAILURE(v_v, WASM_RETHROW(0));
+}
+
 #undef WASM_TRY_OP
 #undef WASM_CATCH
+#undef WASM_RETHROW
 
 TEST_F(FunctionBodyDecoderTest, MultiValBlock1) {
   WASM_FEATURE_SCOPE(mv);
@@ -2799,6 +2818,7 @@ TEST_F(WasmOpcodeLengthTest, Statements) {
   EXPECT_LENGTH(2, kExprBr);
   EXPECT_LENGTH(2, kExprBrIf);
   EXPECT_LENGTH(2, kExprThrow);
+  EXPECT_LENGTH(2, kExprRethrow);
   EXPECT_LENGTH(2, kExprCatch);
   EXPECT_LENGTH_N(2, kExprBlock, kLocalI32);
   EXPECT_LENGTH_N(2, kExprLoop, kLocalI32);
@@ -2875,7 +2895,7 @@ TEST_F(WasmOpcodeLengthTest, LoadsAndStores) {
 
 TEST_F(WasmOpcodeLengthTest, MiscMemExpressions) {
   EXPECT_LENGTH(2, kExprMemorySize);
-  EXPECT_LENGTH(2, kExprGrowMemory);
+  EXPECT_LENGTH(2, kExprMemoryGrow);
 }
 
 TEST_F(WasmOpcodeLengthTest, SimpleExpressions) {

@@ -128,6 +128,74 @@
       ]
     },
     {
+      "name": "ArrayLiteralInitialSpreadSmallDoublePacked",
+      "path": ["ArrayLiteralInitialSpreadSmallDoublePacked"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayLiteralInitialSpreadSmallDoublePacked\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "Spread"},
+        {"name": "ForLength"},
+        {"name": "ForLengthEmpty"},
+        {"name": "Slice"},
+        {"name": "Slice0"},
+        {"name": "ConcatReceive"},
+        {"name": "ConcatArg"},
+        {"name": "ForOfPush"},
+        {"name": "MapId"}
+      ]
+    },
+    {
+      "name": "ArrayLiteralInitialSpreadLargeDoublePacked",
+      "path": ["ArrayLiteralInitialSpreadLargeDoublePacked"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayLiteralInitialSpreadLargeDoublePacked\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "Spread"},
+        {"name": "ForLength"},
+        {"name": "ForLengthEmpty"},
+        {"name": "Slice"},
+        {"name": "Slice0"},
+        {"name": "ConcatReceive"},
+        {"name": "ConcatArg"}
+      ]
+    },
+    {
+      "name": "ArrayLiteralInitialSpreadSmallDoubleHoley",
+      "path": ["ArrayLiteralInitialSpreadSmallDoubleHoley"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayLiteralInitialSpreadSmallDoubleHoley\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "Spread"},
+        {"name": "ForLength"},
+        {"name": "ForLengthEmpty"},
+        {"name": "Slice"},
+        {"name": "Slice0"},
+        {"name": "ConcatReceive"},
+        {"name": "ConcatArg"},
+        {"name": "ForOfPush"},
+        {"name": "MapId"}
+      ]
+    },
+    {
+      "name": "ArrayLiteralInitialSpreadLargeDoubleHoley",
+      "path": ["ArrayLiteralInitialSpreadLargeDoubleHoley"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayLiteralInitialSpreadLargeDoubleHoley\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "Spread"},
+        {"name": "ForLength"},
+        {"name": "ForLengthEmpty"},
+        {"name": "Slice"},
+        {"name": "Slice0"},
+        {"name": "ConcatReceive"},
+        {"name": "ConcatArg"}
+      ]
+    },
+    {
       "name": "ArrayLiteralInitialSpreadSmallSmiMap",
       "path": ["ArrayLiteralInitialSpreadSmallSmiMap"],
       "main": "run.js",
@@ -819,13 +887,18 @@
         {"name": "SmallMixedArrayOf"},
         {"name": "SmiFrom"},
         {"name": "SmallSmiFrom"},
-        {"name": "SmiNoMapFrom"},
+        {"name": "SmiCowNoMapFrom"},
+        {"name": "SmiNonCowNoMapFrom"},
         {"name": "SmiNoIteratorFrom"},
         {"name": "TransplantedFrom"},
         {"name": "DoubleFrom"},
+        {"name": "DoubleNoMapFrom"},
         {"name": "StringFrom"},
-        {"name": "StringNoMapFrom"},
+        {"name": "StringCowNoMapFrom"},
+        {"name": "StringNonCowNoMapFrom"},
         {"name": "MixedFrom"},
+        {"name": "MixedCowNoMapFrom"},
+        {"name": "MixedNonCowNoMapFrom"},
         {"name": "Array.slice(500)"},
         {"name": "Array.slice(500,999)"},
         {"name": "Array.slice(-500)"},
@@ -840,6 +913,22 @@
         {"name": "StringCopyWithin"},
         {"name": "SparseSmiCopyWithin"},
         {"name": "SparseStringCopyWithin"}
+      ]
+    },
+    {
+      "name": "ArrayIndexOfIncludesPolymorphic",
+      "path": ["ArrayIndexOfIncludesPolymorphic"],
+      "main": "run.js",
+      "resources": ["indexof-includes-polymorphic.js"],
+      "test_flags": ["indexof-includes-polymorphic"],
+      "results_regexp": "^%s\\-ArrayIndexOfIncludesPolymorphic\\(Score\\): (.+)$",
+      "flags": [
+        "--allow-natives-syntax"
+      ],
+      "tests": [
+        {"name": "for loop"},
+        {"name": "Array#indexOf"},
+        {"name": "Array#includes"}
       ]
     },
     {

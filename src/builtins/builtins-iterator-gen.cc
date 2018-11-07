@@ -5,14 +5,18 @@
 #include "src/builtins/builtins-iterator-gen.h"
 #include "src/builtins/growable-fixed-array-gen.h"
 
+#include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/code-stub-assembler.h"
 #include "src/heap/factory-inl.h"
+#include "torque-generated/builtins-base-from-dsl-gen.h"
 
 namespace v8 {
 namespace internal {
+
+typedef BaseBuiltinsFromDSLAssembler::IteratorRecord IteratorRecord;
 
 using compiler::Node;
 
@@ -73,7 +77,7 @@ IteratorRecord IteratorBuiltinsAssembler::GetIterator(Node* context,
   }
 }
 
-Node* IteratorBuiltinsAssembler::IteratorStep(
+TNode<Object> IteratorBuiltinsAssembler::IteratorStep(
     Node* context, const IteratorRecord& iterator, Label* if_done,
     Node* fast_iterator_result_map, Label* if_exception, Variable* exception) {
   DCHECK_NOT_NULL(if_done);
@@ -123,7 +127,7 @@ Node* IteratorBuiltinsAssembler::IteratorStep(
   }
 
   BIND(&return_result);
-  return result;
+  return UncheckedCast<Object>(result);
 }
 
 Node* IteratorBuiltinsAssembler::IteratorValue(Node* context, Node* result,
@@ -163,8 +167,8 @@ void IteratorBuiltinsAssembler::IteratorCloseOnException(
   // Perform ES #sec-iteratorclose when an exception occurs. This simpler
   // algorithm does not include redundant steps which are never reachable from
   // the spec IteratorClose algorithm.
-  DCHECK_NOT_NULL(if_exception);
-  DCHECK_NOT_NULL(exception);
+  DCHECK((if_exception != nullptr && exception != nullptr) ||
+         IsExceptionHandlerActive());
   CSA_ASSERT(this, IsNotTheHole(exception->value()));
   CSA_ASSERT(this, IsJSReceiver(iterator.object));
 
@@ -215,7 +219,7 @@ TNode<JSArray> IteratorBuiltinsAssembler::IterableToList(
   BIND(&loop_start);
   {
     //  a. Set next to ? IteratorStep(iteratorRecord).
-    TNode<Object> next = CAST(IteratorStep(context, iterator_record, &done));
+    TNode<Object> next = IteratorStep(context, iterator_record, &done);
     //  b. If next is not false, then
     //   i. Let nextValue be ? IteratorValue(next).
     TNode<Object> next_value = CAST(IteratorValue(context, next));
@@ -261,37 +265,84 @@ TF_BUILTIN(IterableToListMayPreserveHoles, IteratorBuiltinsAssembler) {
   TailCallBuiltin(Builtins::kIterableToList, context, iterable, iterator_fn);
 }
 
-// This builtin loads the property Symbol.iterator as the iterator, and has a
-// fast path for fast arrays and another one for strings. These fast paths will
-// only be taken if Symbol.iterator and the Iterator prototype are not modified
-// in a way that changes the original iteration behavior.
-// * In case of fast holey arrays, holes will be converted to undefined to
-// reflect iteration semantics. Note that replacement by undefined is only
-// correct when the NoElements protector is valid.
-TF_BUILTIN(IterableToListWithSymbolLookup, IteratorBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> iterable = CAST(Parameter(Descriptor::kIterable));
-
-  Label slow_path(this), check_string(this);
-
-  GotoIfForceSlowPath(&slow_path);
+void IteratorBuiltinsAssembler::FastIterableToList(
+    TNode<Context> context, TNode<Object> iterable,
+    TVariable<Object>* var_result, Label* slow) {
+  Label done(this), check_string(this), check_map(this), check_set(this);
 
   GotoIfNot(IsFastJSArrayWithNoCustomIteration(iterable, context),
             &check_string);
 
   // Fast path for fast JSArray.
-  TailCallBuiltin(Builtins::kCloneFastJSArrayFillingHoles, context, iterable);
+  *var_result =
+      CallBuiltin(Builtins::kCloneFastJSArrayFillingHoles, context, iterable);
+  Goto(&done);
 
   BIND(&check_string);
   {
+    Label string_maybe_fast_call(this);
     StringBuiltinsAssembler string_assembler(state());
-    GotoIfNot(string_assembler.IsStringPrimitiveWithNoCustomIteration(iterable,
-                                                                      context),
-              &slow_path);
+    string_assembler.BranchIfStringPrimitiveWithNoCustomIteration(
+        iterable, context, &string_maybe_fast_call, &check_map);
 
-    // Fast path for strings.
-    TailCallBuiltin(Builtins::kStringToList, context, iterable);
+    BIND(&string_maybe_fast_call);
+    TNode<IntPtrT> const length = LoadStringLengthAsWord(CAST(iterable));
+    // Use string length as conservative approximation of number of codepoints.
+    GotoIf(
+        IntPtrGreaterThan(length, IntPtrConstant(JSArray::kMaxFastArrayLength)),
+        slow);
+    *var_result = CallBuiltin(Builtins::kStringToList, context, iterable);
+    Goto(&done);
   }
+
+  BIND(&check_map);
+  {
+    Label map_fast_call(this);
+    BranchIfIterableWithOriginalKeyOrValueMapIterator(
+        state(), iterable, context, &map_fast_call, &check_set);
+
+    BIND(&map_fast_call);
+    *var_result = CallBuiltin(Builtins::kMapIteratorToList, context, iterable);
+    Goto(&done);
+  }
+
+  BIND(&check_set);
+  {
+    Label set_fast_call(this);
+    BranchIfIterableWithOriginalValueSetIterator(state(), iterable, context,
+                                                 &set_fast_call, slow);
+
+    BIND(&set_fast_call);
+    *var_result =
+        CallBuiltin(Builtins::kSetOrSetIteratorToList, context, iterable);
+    Goto(&done);
+  }
+
+  BIND(&done);
+}
+
+// This builtin loads the property Symbol.iterator as the iterator, and has fast
+// paths for fast arrays, for primitive strings, for sets and set iterators, and
+// for map iterators. These fast paths will only be taken if Symbol.iterator and
+// the Iterator prototype are not modified in a way that changes the original
+// iteration behavior.
+// * In case of fast holey arrays, holes will be converted to undefined to
+//   reflect iteration semantics. Note that replacement by undefined is only
+//   correct when the NoElements protector is valid.
+// * In case of map/set iterators, there is an additional requirement that the
+//   iterator is not partially consumed. To be spec-compliant, after spreading
+//   the iterator is set to be exhausted.
+TF_BUILTIN(IterableToListWithSymbolLookup, IteratorBuiltinsAssembler) {
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Object> iterable = CAST(Parameter(Descriptor::kIterable));
+
+  Label slow_path(this);
+
+  GotoIfForceSlowPath(&slow_path);
+
+  TVARIABLE(Object, var_result);
+  FastIterableToList(context, iterable, &var_result, &slow_path);
+  Return(var_result.value());
 
   BIND(&slow_path);
   {

@@ -14,7 +14,6 @@
 #include "src/frames-inl.h"
 #include "src/frames.h"
 #include "src/global-handles.h"
-#include "src/messages.h"
 #include "src/objects.h"
 #include "src/ostreams.h"
 #include "src/snapshot/natives.h"
@@ -2125,11 +2124,12 @@ static void AddCode(const char* name, Code* code, SharedFunctionInfo* shared,
 void EventHandler(const v8::JitCodeEvent* event) {
   if (!FLAG_gdbjit) return;
   if (event->code_type != v8::JitCodeEvent::JIT_CODE) return;
-  base::LockGuard<base::Mutex> lock_guard(mutex.Pointer());
+  base::MutexGuard lock_guard(mutex.Pointer());
   switch (event->type) {
     case v8::JitCodeEvent::CODE_ADDED: {
       Address addr = reinterpret_cast<Address>(event->code_start);
-      Code* code = Code::GetCodeFromTargetAddress(addr);
+      Isolate* isolate = reinterpret_cast<Isolate*>(event->isolate);
+      Code* code = isolate->heap()->GcSafeFindCodeForInnerPointer(addr);
       LineInfo* lineinfo = GetLineInfo(addr);
       EmbeddedVector<char, 256> buffer;
       StringBuilder builder(buffer.start(), buffer.length());

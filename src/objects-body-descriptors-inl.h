@@ -11,6 +11,7 @@
 #include "src/objects/hash-table.h"
 #include "src/objects/js-collection.h"
 #include "src/objects/js-weak-refs.h"
+#include "src/objects/slots.h"
 #include "src/transitions.h"
 #include "src/wasm/wasm-objects-inl.h"
 
@@ -507,9 +508,10 @@ class Foreign::BodyDescriptor final : public BodyDescriptorBase {
   template <typename ObjectVisitor>
   static inline void IterateBody(Map* map, HeapObject* obj, int object_size,
                                  ObjectVisitor* v) {
-    v->VisitExternalReference(Foreign::cast(obj),
-                              reinterpret_cast<Address*>(HeapObject::RawField(
-                                  obj, kForeignAddressOffset)));
+    v->VisitExternalReference(
+        Foreign::cast(obj),
+        reinterpret_cast<Address*>(
+            HeapObject::RawField(obj, kForeignAddressOffset).address()));
   }
 
   static inline int SizeOf(Map* map, HeapObject* object) { return kSize; }
@@ -799,6 +801,7 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case JS_PROMISE_TYPE:
     case JS_CONTEXT_EXTENSION_OBJECT_TYPE:
     case JS_GENERATOR_OBJECT_TYPE:
+    case JS_ASYNC_FUNCTION_OBJECT_TYPE:
     case JS_ASYNC_GENERATOR_OBJECT_TYPE:
     case JS_VALUE_TYPE:
     case JS_DATE_TYPE:
@@ -832,6 +835,7 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case JS_INTL_NUMBER_FORMAT_TYPE:
     case JS_INTL_PLURAL_RULES_TYPE:
     case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
+    case JS_INTL_SEGMENT_ITERATOR_TYPE:
     case JS_INTL_SEGMENTER_TYPE:
 #endif  // V8_INTL_SUPPORT
     case WASM_EXCEPTION_TYPE:
@@ -856,6 +860,7 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case JS_FUNCTION_TYPE:
       return Op::template apply<JSFunction::BodyDescriptor>(p1, p2, p3, p4);
     case JS_WEAK_CELL_TYPE:
+    case JS_WEAK_REF_TYPE:
       return Op::template apply<JSWeakCell::BodyDescriptor>(p1, p2, p3, p4);
     case ODDBALL_TYPE:
       return Op::template apply<Oddball::BodyDescriptor>(p1, p2, p3, p4);

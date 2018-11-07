@@ -11,12 +11,14 @@
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects-inl.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-array-inl.h"
+#include "src/objects/slots-atomic-inl.h"
+#include "src/objects/slots.h"
 #include "src/utils.h"
 
 // Each concrete ElementsAccessor can handle exactly one ElementsKind,
@@ -146,7 +148,7 @@ void CopyObjectToObjectElements(Isolate* isolate, FixedArrayBase* from_base,
       int start = to_start + copy_size;
       int length = to_base->length() - start;
       if (length > 0) {
-        MemsetPointer(FixedArray::cast(to_base)->data_start() + start,
+        MemsetPointer(FixedArray::cast(to_base)->RawFieldOfElementAt(start),
                       roots.the_hole_value(), length);
       }
     }
@@ -184,7 +186,7 @@ static void CopyDictionaryToObjectElements(
       int start = to_start + copy_size;
       int length = to_base->length() - start;
       if (length > 0) {
-        MemsetPointer(FixedArray::cast(to_base)->data_start() + start,
+        MemsetPointer(FixedArray::cast(to_base)->RawFieldOfElementAt(start),
                       ReadOnlyRoots(isolate).the_hole_value(), length);
       }
     }
@@ -233,7 +235,7 @@ static void CopyDoubleToObjectElements(Isolate* isolate,
       int start = to_start;
       int length = to_base->length() - start;
       if (length > 0) {
-        MemsetPointer(FixedArray::cast(to_base)->data_start() + start,
+        MemsetPointer(FixedArray::cast(to_base)->RawFieldOfElementAt(start),
                       ReadOnlyRoots(isolate).the_hole_value(), length);
       }
     }
@@ -291,8 +293,7 @@ static void CopyDoubleToDoubleElements(FixedArrayBase* from_base,
   to_address += kDoubleSize * to_start;
   from_address += kDoubleSize * from_start;
   int words_per_double = (kDoubleSize / kPointerSize);
-  CopyWords(reinterpret_cast<Object**>(to_address),
-            reinterpret_cast<Object**>(from_address),
+  CopyWords(to_address, from_address,
             static_cast<size_t>(words_per_double * copy_size));
 }
 
@@ -458,16 +459,13 @@ static void TraceTopFrame(Isolate* isolate) {
 static void SortIndices(
     Isolate* isolate, Handle<FixedArray> indices, uint32_t sort_size,
     WriteBarrierMode write_barrier_mode = UPDATE_WRITE_BARRIER) {
-  // Use AtomicElement wrapper to ensure that std::sort uses atomic load and
+  // Use AtomicSlot wrapper to ensure that std::sort uses atomic load and
   // store operations that are safe for concurrent marking.
-  base::AtomicElement<Object*>* start =
-      reinterpret_cast<base::AtomicElement<Object*>*>(
-          indices->GetFirstElementAddress());
+  AtomicSlot start(indices->GetFirstElementAddress());
   std::sort(start, start + sort_size,
-            [isolate](const base::AtomicElement<Object*>& elementA,
-                      const base::AtomicElement<Object*>& elementB) {
-              const Object* a = elementA.value();
-              const Object* b = elementB.value();
+            [isolate](Address elementA, Address elementB) {
+              const Object* a = reinterpret_cast<Object*>(elementA);
+              const Object* b = reinterpret_cast<Object*>(elementB);
               if (a->IsSmi() || !a->IsUndefined(isolate)) {
                 if (!b->IsSmi() && b->IsUndefined(isolate)) {
                   return true;
@@ -2226,22 +2224,16 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
         heap->CanMoveObjectStart(*dst_elms)) {
       // Update all the copies of this backing_store handle.
       *dst_elms.location() =
-          BackingStore::cast(heap->LeftTrimFixedArray(*dst_elms, src_index));
+          BackingStore::cast(heap->LeftTrimFixedArray(*dst_elms, src_index))
+              ->ptr();
       receiver->set_elements(*dst_elms);
       // Adjust the hole offset as the array has been shrunk.
       hole_end -= src_index;
       DCHECK_LE(hole_start, backing_store->length());
       DCHECK_LE(hole_end, backing_store->length());
     } else if (len != 0) {
-      if (IsDoubleElementsKind(KindTraits::Kind)) {
-        MemMove(dst_elms->data_start() + dst_index,
-                dst_elms->data_start() + src_index, len * kDoubleSize);
-      } else {
-        DisallowHeapAllocation no_gc;
-        WriteBarrierMode mode = GetWriteBarrierMode(KindTraits::Kind);
-        heap->MoveElements(FixedArray::cast(*dst_elms), dst_index, src_index,
-                           len, mode);
-      }
+      WriteBarrierMode mode = GetWriteBarrierMode(KindTraits::Kind);
+      dst_elms->MoveElements(heap, dst_index, src_index, len, mode);
     }
     if (hole_start != hole_end) {
       dst_elms->FillWithHoles(hole_start, hole_end);
@@ -2285,51 +2277,43 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
     Object* undefined = ReadOnlyRoots(isolate).undefined_value();
     Object* value = *search_value;
 
-    // Elements beyond the capacity of the backing store treated as undefined.
-    if (value == undefined &&
-        static_cast<uint32_t>(elements_base->length()) < length) {
-      return Just(true);
-    }
-
     if (start_from >= length) return Just(false);
 
-    length = std::min(static_cast<uint32_t>(elements_base->length()), length);
+    // Elements beyond the capacity of the backing store treated as undefined.
+    uint32_t elements_length = static_cast<uint32_t>(elements_base->length());
+    if (value == undefined && elements_length < length) return Just(true);
+    if (elements_length == 0) {
+      DCHECK_NE(value, undefined);
+      return Just(false);
+    }
+
+    length = std::min(elements_length, length);
 
     if (!value->IsNumber()) {
       if (value == undefined) {
-        // Only PACKED_ELEMENTS, HOLEY_ELEMENTS, HOLEY_SMI_ELEMENTS, and
-        // HOLEY_DOUBLE_ELEMENTS can have `undefined` as a value.
-        if (!IsObjectElementsKind(Subclass::kind()) &&
-            !IsHoleyElementsKind(Subclass::kind())) {
-          return Just(false);
-        }
-
-        // Search for `undefined` or The Hole in PACKED_ELEMENTS,
-        // HOLEY_ELEMENTS or HOLEY_SMI_ELEMENTS
+        // Search for `undefined` or The Hole. Even in the case of
+        // PACKED_DOUBLE_ELEMENTS or PACKED_SMI_ELEMENTS, we might encounter The
+        // Hole here, since the {length} used here can be larger than
+        // JSArray::length.
         if (IsSmiOrObjectElementsKind(Subclass::kind())) {
           auto elements = FixedArray::cast(receiver->elements());
 
           for (uint32_t k = start_from; k < length; ++k) {
             Object* element_k = elements->get(k);
 
-            if (IsHoleyElementsKind(Subclass::kind()) &&
-                element_k == the_hole) {
-              return Just(true);
-            }
-            if (IsObjectElementsKind(Subclass::kind()) &&
-                element_k == undefined) {
+            if (element_k == the_hole || element_k == undefined) {
               return Just(true);
             }
           }
           return Just(false);
         } else {
-          // Search for The Hole in HOLEY_DOUBLE_ELEMENTS
-          DCHECK_EQ(Subclass::kind(), HOLEY_DOUBLE_ELEMENTS);
+          // Search for The Hole in HOLEY_DOUBLE_ELEMENTS or
+          // PACKED_DOUBLE_ELEMENTS.
+          DCHECK(IsDoubleElementsKind(Subclass::kind()));
           auto elements = FixedDoubleArray::cast(receiver->elements());
 
           for (uint32_t k = start_from; k < length; ++k) {
-            if (IsHoleyElementsKind(Subclass::kind()) &&
-                elements->is_the_hole(k)) {
+            if (elements->is_the_hole(k)) {
               return Just(true);
             }
           }
@@ -2349,7 +2333,7 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
 
         for (uint32_t k = start_from; k < length; ++k) {
           Object* element_k = elements->get(k);
-          if (IsHoleyElementsKind(Subclass::kind()) && element_k == the_hole) {
+          if (element_k == the_hole) {
             continue;
           }
 
@@ -2367,8 +2351,7 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
           auto elements = FixedDoubleArray::cast(receiver->elements());
 
           for (uint32_t k = start_from; k < length; ++k) {
-            if (IsHoleyElementsKind(Subclass::kind()) &&
-                elements->is_the_hole(k)) {
+            if (elements->is_the_hole(k)) {
               continue;
             }
             if (elements->get_scalar(k) == search_value) return Just(true);
@@ -2400,8 +2383,7 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
           auto elements = FixedDoubleArray::cast(receiver->elements());
 
           for (uint32_t k = start_from; k < length; ++k) {
-            if (IsHoleyElementsKind(Subclass::kind()) &&
-                elements->is_the_hole(k)) {
+            if (elements->is_the_hole(k)) {
               continue;
             }
             if (std::isnan(elements->get_scalar(k))) return Just(true);
@@ -2644,6 +2626,10 @@ class FastSmiOrObjectElementsAccessor
     // NaN can never be found by strict equality.
     if (value->IsNaN()) return Just<int64_t>(-1);
 
+    // k can be greater than receiver->length() below, but it is bounded by
+    // elements_base->length() so we never read out of bounds. This means that
+    // elements->get(k) can return the hole, for which the StrictEquals will
+    // always fail.
     FixedArray* elements = FixedArray::cast(receiver->elements());
     for (uint32_t k = start_from; k < length; ++k) {
       if (value->StrictEquals(elements->get(k))) return Just<int64_t>(k);
@@ -3440,8 +3426,7 @@ class TypedElementsAccessor
 
       if (V8_UNLIKELY(destination->WasNeutered())) {
         const char* op = "set";
-        const MessageTemplate::Template message =
-            MessageTemplate::kDetachedOperation;
+        const MessageTemplate message = MessageTemplate::kDetachedOperation;
         Handle<String> operation =
             isolate->factory()->NewStringFromAsciiChecked(op);
         THROW_NEW_ERROR_RETURN_FAILURE(isolate,

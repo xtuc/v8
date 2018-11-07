@@ -11,10 +11,10 @@
 #include "src/heap/factory.h"
 #include "src/ic/stub-cache.h"
 #include "src/isolate.h"
-#include "src/macro-assembler.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/map.h"
 #include "src/objects/maybe-object.h"
+#include "src/objects/smi.h"
 
 namespace v8 {
 namespace internal {
@@ -59,7 +59,7 @@ class IC {
            IsKeyedStoreIC() || IsStoreInArrayLiteralICKind(kind());
   }
 
-  static inline bool IsHandler(MaybeObject* object);
+  static inline bool IsHandler(MaybeObject object);
 
   // Nofity the IC system that a feedback has changed.
   static void OnFeedbackChanged(Isolate* isolate, FeedbackVector* vector,
@@ -85,11 +85,7 @@ class IC {
                                               Address address);
 
   bool is_vector_set() { return vector_set_; }
-  bool vector_needs_update() {
-    return (!vector_set_ &&
-            (state() != MEGAMORPHIC ||
-             Smi::ToInt(nexus()->GetFeedbackExtra()->cast<Smi>()) != ELEMENT));
-  }
+  inline bool vector_needs_update();
 
   // Configure for most states.
   bool ConfigureVectorState(IC::State new_state, Handle<Object> key);
@@ -109,8 +105,8 @@ class IC {
   void TraceIC(const char* type, Handle<Object> name, State old_state,
                State new_state);
 
-  MaybeHandle<Object> TypeError(MessageTemplate::Template,
-                                Handle<Object> object, Handle<Object> key);
+  MaybeHandle<Object> TypeError(MessageTemplate, Handle<Object> object,
+                                Handle<Object> key);
   MaybeHandle<Object> ReferenceError(Handle<Name> name);
 
   void TraceHandlerCacheHitStats(LookupIterator* lookup);

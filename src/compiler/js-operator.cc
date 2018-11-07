@@ -714,6 +714,8 @@ struct JSOperatorGlobalCache final {
   Name##Operator<CompareOperationHint::kSymbol> k##Name##SymbolOperator;     \
   Name##Operator<CompareOperationHint::kBigInt> k##Name##BigIntOperator;     \
   Name##Operator<CompareOperationHint::kReceiver> k##Name##ReceiverOperator; \
+  Name##Operator<CompareOperationHint::kReceiverOrNullOrUndefined>           \
+      k##Name##ReceiverOrNullOrUndefinedOperator;                            \
   Name##Operator<CompareOperationHint::kAny> k##Name##AnyOperator;
   COMPARE_OP_LIST(COMPARE_OP)
 #undef COMPARE_OP
@@ -781,6 +783,8 @@ BINARY_OP_LIST(BINARY_OP)
         return &cache_.k##Name##BigIntOperator;                        \
       case CompareOperationHint::kReceiver:                            \
         return &cache_.k##Name##ReceiverOperator;                      \
+      case CompareOperationHint::kReceiverOrNullOrUndefined:           \
+        return &cache_.k##Name##ReceiverOrNullOrUndefinedOperator;     \
       case CompareOperationHint::kAny:                                 \
         return &cache_.k##Name##AnyOperator;                           \
     }                                                                  \
@@ -979,6 +983,11 @@ const Operator* JSOperatorBuilder::GeneratorStore(int register_count) {
       register_count);                                  // parameter
 }
 
+int RegisterCountOf(Operator const* op) {
+  DCHECK_EQ(IrOpcode::kJSCreateAsyncFunctionObject, op->opcode());
+  return OpParameter<int>(op);
+}
+
 int GeneratorStoreValueCountOf(const Operator* op) {
   DCHECK_EQ(IrOpcode::kJSGeneratorStore, op->opcode());
   return OpParameter<int>(op);
@@ -1134,6 +1143,16 @@ const Operator* JSOperatorBuilder::CreateArrayIterator(IterationKind kind) {
       "JSCreateArrayIterator",                                    // name
       1, 1, 1, 1, 1, 0,                                           // counts
       parameters);                                                // parameter
+}
+
+const Operator* JSOperatorBuilder::CreateAsyncFunctionObject(
+    int register_count) {
+  return new (zone()) Operator1<int>(          // --
+      IrOpcode::kJSCreateAsyncFunctionObject,  // opcode
+      Operator::kEliminatable,                 // flags
+      "JSCreateAsyncFunctionObject",           // name
+      3, 1, 1, 1, 1, 0,                        // counts
+      register_count);                         // parameter
 }
 
 const Operator* JSOperatorBuilder::CreateCollectionIterator(

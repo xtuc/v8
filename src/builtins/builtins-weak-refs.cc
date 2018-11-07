@@ -28,19 +28,35 @@ BUILTIN(WeakFactoryConstructor) {
   // TODO(marja): (spec) here we could return an error if cleanup is not a
   // function, if the spec said so.
   Handle<JSWeakFactory> weak_factory = Handle<JSWeakFactory>::cast(result);
+  weak_factory->set_native_context(*isolate->native_context());
   weak_factory->set_cleanup(*cleanup);
+  weak_factory->set_flags(
+      JSWeakFactory::ScheduledForCleanupField::encode(false));
   return *weak_factory;
 }
 
 BUILTIN(WeakFactoryMakeCell) {
   HandleScope scope(isolate);
+  const char* method_name = "WeakFactory.prototype.makeCell";
 
-  CHECK_RECEIVER(JSWeakFactory, weak_factory, "WeakFactory.makeCell");
+  CHECK_RECEIVER(JSWeakFactory, weak_factory, method_name);
 
-  Handle<Object> object = args.atOrUndefined(isolate, 1);
-  // TODO(marja): if the type is not an object, throw TypeError. Ditto for
-  // SameValue(target, holdings).
-  Handle<JSObject> js_object = Handle<JSObject>::cast(object);
+  Handle<Object> target = args.atOrUndefined(isolate, 1);
+  if (!target->IsJSReceiver()) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate, NewTypeError(MessageTemplate::kMakeCellTargetMustBeObject,
+                              isolate->factory()->NewStringFromAsciiChecked(
+                                  method_name)));
+  }
+  Handle<JSReceiver> target_receiver = Handle<JSReceiver>::cast(target);
+  Handle<Object> holdings = args.atOrUndefined(isolate, 2);
+  if (target->SameValue(*holdings)) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate,
+        NewTypeError(
+            MessageTemplate::kMakeCellTargetAndHoldingsMustNotBeSame,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
+  }
 
   // TODO(marja): Realms.
 
@@ -53,15 +69,50 @@ BUILTIN(WeakFactoryMakeCell) {
   Handle<JSWeakCell> weak_cell =
       Handle<JSWeakCell>::cast(isolate->factory()->NewJSObjectFromMap(
           weak_cell_map, TENURED, Handle<AllocationSite>::null()));
-  weak_cell->set_factory(*weak_factory);
-  weak_cell->set_target(*js_object);
-  weak_cell->set_prev(ReadOnlyRoots(isolate).undefined_value());
-  weak_cell->set_next(weak_factory->active_cells());
-  if (weak_factory->active_cells()->IsJSWeakCell()) {
-    JSWeakCell::cast(weak_factory->active_cells())->set_prev(*weak_cell);
-  }
-  weak_factory->set_active_cells(*weak_cell);
+  weak_cell->set_target(*target_receiver);
+  weak_cell->set_holdings(*holdings);
+  weak_factory->AddWeakCell(*weak_cell);
   return *weak_cell;
+}
+
+BUILTIN(WeakFactoryMakeRef) {
+  HandleScope scope(isolate);
+  const char* method_name = "WeakFactory.prototype.makeRef";
+
+  CHECK_RECEIVER(JSWeakFactory, weak_factory, method_name);
+
+  Handle<Object> target = args.atOrUndefined(isolate, 1);
+  if (!target->IsJSReceiver()) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate, NewTypeError(MessageTemplate::kMakeRefTargetMustBeObject,
+                              isolate->factory()->NewStringFromAsciiChecked(
+                                  method_name)));
+  }
+  Handle<JSReceiver> target_receiver = Handle<JSReceiver>::cast(target);
+  Handle<Object> holdings = args.atOrUndefined(isolate, 2);
+  if (target->SameValue(*holdings)) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate,
+        NewTypeError(
+            MessageTemplate::kMakeRefTargetAndHoldingsMustNotBeSame,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
+  }
+
+  // TODO(marja): Realms.
+
+  Handle<Map> weak_ref_map(isolate->native_context()->js_weak_ref_map(),
+                           isolate);
+
+  Handle<JSWeakRef> weak_ref =
+      Handle<JSWeakRef>::cast(isolate->factory()->NewJSObjectFromMap(
+          weak_ref_map, TENURED, Handle<AllocationSite>::null()));
+  weak_ref->set_target(*target_receiver);
+  weak_ref->set_holdings(*holdings);
+  weak_factory->AddWeakCell(*weak_ref);
+
+  isolate->heap()->AddKeepDuringJobTarget(target_receiver);
+
+  return *weak_ref;
 }
 
 BUILTIN(WeakFactoryCleanupIteratorNext) {
@@ -77,6 +128,34 @@ BUILTIN(WeakFactoryCleanupIteratorNext) {
       handle(weak_factory->PopClearedCell(isolate), isolate);
 
   return *isolate->factory()->NewJSIteratorResult(weak_cell_object, false);
+}
+
+BUILTIN(WeakCellHoldingsGetter) {
+  HandleScope scope(isolate);
+  CHECK_RECEIVER(JSWeakCell, weak_cell, "get WeakCell.holdings");
+  return weak_cell->holdings();
+}
+
+BUILTIN(WeakCellClear) {
+  HandleScope scope(isolate);
+  CHECK_RECEIVER(JSWeakCell, weak_cell, "WeakCell.prototype.clear");
+  weak_cell->Clear(isolate);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+BUILTIN(WeakRefDeref) {
+  HandleScope scope(isolate);
+  CHECK_RECEIVER(JSWeakRef, weak_ref, "WeakRef.prototype.deref");
+  if (weak_ref->target()->IsJSReceiver()) {
+    Handle<JSReceiver> target =
+        handle(JSReceiver::cast(weak_ref->target()), isolate);
+    // AddKeepDuringJobTarget might allocate and cause a GC, but it won't clear
+    // weak_ref since we hold a Handle to its target.
+    isolate->heap()->AddKeepDuringJobTarget(target);
+  } else {
+    DCHECK(weak_ref->target()->IsUndefined(isolate));
+  }
+  return weak_ref->target();
 }
 
 }  // namespace internal

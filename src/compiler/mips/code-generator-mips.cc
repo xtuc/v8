@@ -12,6 +12,7 @@
 #include "src/heap/heap-inl.h"
 #include "src/mips/macro-assembler-mips.h"
 #include "src/optimized-compilation-info.h"
+#include "src/wasm/wasm-code-manager.h"
 
 namespace v8 {
 namespace internal {
@@ -144,7 +145,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
  public:
   OutOfLineRecordWrite(CodeGenerator* gen, Register object, Register index,
                        Register value, Register scratch0, Register scratch1,
-                       RecordWriteMode mode)
+                       RecordWriteMode mode, StubCallMode stub_mode)
       : OutOfLineCode(gen),
         object_(object),
         index_(index),
@@ -152,30 +153,9 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
         scratch0_(scratch0),
         scratch1_(scratch1),
         mode_(mode),
+        stub_mode_(stub_mode),
         must_save_lr_(!gen->frame_access_state()->has_frame()),
         zone_(gen->zone()) {}
-
-  void SaveRegisters(RegList registers) {
-    DCHECK_LT(0, NumRegs(registers));
-    RegList regs = 0;
-    for (int i = 0; i < Register::kNumRegisters; ++i) {
-      if ((registers >> i) & 1u) {
-        regs |= Register::from_code(i).bit();
-      }
-    }
-    __ MultiPush(regs | ra.bit());
-  }
-
-  void RestoreRegisters(RegList registers) {
-    DCHECK_LT(0, NumRegs(registers));
-    RegList regs = 0;
-    for (int i = 0; i < Register::kNumRegisters; ++i) {
-      if ((registers >> i) & 1u) {
-        regs |= Register::from_code(i).bit();
-      }
-    }
-    __ MultiPop(regs | ra.bit());
-  }
 
   void Generate() final {
     if (mode_ > RecordWriteMode::kValueIsPointer) {
@@ -194,8 +174,17 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
       // We need to save and restore ra if the frame was elided.
       __ Push(ra);
     }
-    __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
-                           save_fp_mode);
+
+    if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
+      // A direct call to a wasm runtime stub defined in this module.
+      // Just encode the stub index. This will be patched when the code
+      // is added to the native module and copied into wasm code space.
+      __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
+                             save_fp_mode, wasm::WasmCode::kWasmRecordWrite);
+    } else {
+      __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
+                             save_fp_mode);
+    }
     if (must_save_lr_) {
       __ Pop(ra);
     }
@@ -208,6 +197,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
   Register const scratch0_;
   Register const scratch1_;
   RecordWriteMode const mode_;
+  StubCallMode const stub_mode_;
   bool must_save_lr_;
   Zone* zone_;
 };
@@ -861,8 +851,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       Register value = i.InputRegister(2);
       Register scratch0 = i.TempRegister(0);
       Register scratch1 = i.TempRegister(1);
-      auto ool = new (zone()) OutOfLineRecordWrite(this, object, index, value,
-                                                   scratch0, scratch1, mode);
+      auto ool = new (zone())
+          OutOfLineRecordWrite(this, object, index, value, scratch0, scratch1,
+                               mode, DetermineStubCallMode());
       __ Addu(kScratchReg, object, index);
       __ sw(value, MemOperand(kScratchReg));
       __ CheckPageFlag(object, scratch0,
@@ -1781,8 +1772,19 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       ATOMIC64_BINOP_LOGIC_CASE(Xor, XorPair)
 #undef ATOMIC64_BINOP_LOGIC_CASE
     case kMipsWord32AtomicPairExchange:
-    case kMipsWord32AtomicPairCompareExchange:
+      UNREACHABLE();
       break;
+    case kMipsWord32AtomicPairCompareExchange: {
+      FrameScope scope(tasm(), StackFrame::MANUAL);
+      __ PushCallerSaved(kDontSaveFPRegs, v0, v1);
+      __ PrepareCallCFunction(5, 0, kScratchReg);
+      __ addu(a0, i.InputRegister(0), i.InputRegister(1));
+      __ sw(i.InputRegister(5), MemOperand(sp, 16));
+      __ CallCFunction(
+          ExternalReference::atomic_pair_compare_exchange_function(), 5, 0);
+      __ PopCallerSaved(kDontSaveFPRegs, v0, v1);
+      break;
+    }
     case kMipsS128Zero: {
       CpuFeatureScope msa_scope(tasm(), MIPS_SIMD);
       __ xor_v(i.OutputSimd128Register(), i.OutputSimd128Register(),
@@ -3059,7 +3061,8 @@ void CodeGenerator::AssembleArchTrap(Instruction* instr,
       } else {
         gen_->AssembleSourcePosition(instr_);
         // A direct call to a wasm runtime stub defined in this module.
-        // Just encode the stub index. This will be patched at relocation.
+        // Just encode the stub index. This will be patched when the code
+        // is added to the native module and copied into wasm code space.
         __ Call(static_cast<Address>(trap_id), RelocInfo::WASM_STUB_CALL);
         ReferenceMap* reference_map =
             new (gen_->zone()) ReferenceMap(gen_->zone());

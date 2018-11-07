@@ -12,6 +12,7 @@
 #include "src/objects/dictionary.h"
 #include "src/objects/map-inl.h"
 #include "src/objects/maybe-object-inl.h"
+#include "src/objects/smi-inl.h"
 #include "src/v8memory.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -146,7 +147,7 @@ void DependentCode::set_next_link(DependentCode* next) {
   Set(kNextLinkIndex, HeapObjectReference::Strong(next));
 }
 
-int DependentCode::flags() { return Smi::ToInt(Get(kFlagsIndex)->cast<Smi>()); }
+int DependentCode::flags() { return Smi::ToInt(Get(kFlagsIndex)->ToSmi()); }
 
 void DependentCode::set_flags(int flags) {
   Set(kFlagsIndex, MaybeObject::FromObject(Smi::FromInt(flags)));
@@ -162,11 +163,11 @@ DependentCode::DependencyGroup DependentCode::group() {
   return static_cast<DependencyGroup>(GroupField::decode(flags()));
 }
 
-void DependentCode::set_object_at(int i, MaybeObject* object) {
+void DependentCode::set_object_at(int i, MaybeObject object) {
   Set(kCodesStartIndex + i, object);
 }
 
-MaybeObject* DependentCode::object_at(int i) {
+MaybeObject DependentCode::object_at(int i) {
   return Get(kCodesStartIndex + i);
 }
 
@@ -190,10 +191,10 @@ CODE_ACCESSORS(code_data_container, CodeDataContainer, kCodeDataContainerOffset)
 #undef CODE_ACCESSORS
 
 void Code::WipeOutHeader() {
-  WRITE_FIELD(this, kRelocationInfoOffset, nullptr);
-  WRITE_FIELD(this, kDeoptimizationDataOffset, nullptr);
-  WRITE_FIELD(this, kSourcePositionTableOffset, nullptr);
-  WRITE_FIELD(this, kCodeDataContainerOffset, nullptr);
+  WRITE_FIELD(this, kRelocationInfoOffset, Smi::FromInt(0));
+  WRITE_FIELD(this, kDeoptimizationDataOffset, Smi::FromInt(0));
+  WRITE_FIELD(this, kSourcePositionTableOffset, Smi::FromInt(0));
+  WRITE_FIELD(this, kCodeDataContainerOffset, Smi::FromInt(0));
 }
 
 void Code::clear_padding() {
@@ -341,6 +342,14 @@ int Code::ExecutableSize() const {
   return raw_instruction_size() + Code::kHeaderSize;
 }
 
+// static
+void Code::CopyRelocInfoToByteArray(ByteArray* dest, const CodeDesc& desc) {
+  DCHECK_EQ(dest->length(), desc.reloc_size);
+  CopyBytes(dest->GetDataStartAddress(),
+            desc.buffer + desc.buffer_size - desc.reloc_size,
+            static_cast<size_t>(desc.reloc_size));
+}
+
 int Code::CodeSize() const { return SizeFor(body_size()); }
 
 Code::Kind Code::kind() const {
@@ -362,25 +371,17 @@ void Code::initialize_flags(Kind kind, bool has_unwinding_info,
 }
 
 inline bool Code::is_interpreter_trampoline_builtin() const {
-  Builtins* builtins = GetIsolate()->builtins();
-  Code* interpreter_entry_trampoline =
-      builtins->builtin(Builtins::kInterpreterEntryTrampoline);
   bool is_interpreter_trampoline =
-      (builtin_index() == interpreter_entry_trampoline->builtin_index() ||
-       this == builtins->builtin(Builtins::kInterpreterEnterBytecodeAdvance) ||
-       this == builtins->builtin(Builtins::kInterpreterEnterBytecodeDispatch));
-  DCHECK_IMPLIES(is_interpreter_trampoline, !Builtins::IsLazy(builtin_index()));
+      (builtin_index() == Builtins::kInterpreterEntryTrampoline ||
+       builtin_index() == Builtins::kInterpreterEnterBytecodeAdvance ||
+       builtin_index() == Builtins::kInterpreterEnterBytecodeDispatch);
   return is_interpreter_trampoline;
 }
 
 inline bool Code::checks_optimization_marker() const {
-  Builtins* builtins = GetIsolate()->builtins();
-  Code* interpreter_entry_trampoline =
-      builtins->builtin(Builtins::kInterpreterEntryTrampoline);
   bool checks_marker =
-      (this == builtins->builtin(Builtins::kCompileLazy) ||
-       builtin_index() == interpreter_entry_trampoline->builtin_index());
-  DCHECK_IMPLIES(checks_marker, !Builtins::IsLazy(builtin_index()));
+      (builtin_index() == Builtins::kCompileLazy ||
+       builtin_index() == Builtins::kInterpreterEntryTrampoline);
   return checks_marker ||
          (kind() == OPTIMIZED_FUNCTION && marked_for_deoptimization());
 }

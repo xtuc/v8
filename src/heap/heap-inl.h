@@ -21,6 +21,7 @@
 // TODO(mstarzinger): There is one more include to remove in order to no longer
 // leak heap internals to users of this interface!
 #include "src/heap/spaces-inl.h"
+#include "src/isolate-data.h"
 #include "src/isolate.h"
 #include "src/log.h"
 #include "src/msan.h"
@@ -55,23 +56,77 @@ HeapObject* AllocationResult::ToObjectChecked() {
   return HeapObject::cast(object_);
 }
 
-#define ROOT_ACCESSOR(type, name, CamelName) \
-  type* Heap::name() { return type::cast(roots_[RootIndex::k##CamelName]); }
+Isolate* Heap::isolate() {
+  return reinterpret_cast<Isolate*>(
+      reinterpret_cast<intptr_t>(this) -
+      reinterpret_cast<size_t>(reinterpret_cast<Isolate*>(16)->heap()) + 16);
+}
+
+int64_t Heap::external_memory() {
+  return isolate()->isolate_data()->external_memory_;
+}
+
+void Heap::update_external_memory(int64_t delta) {
+  isolate()->isolate_data()->external_memory_ += delta;
+}
+
+void Heap::update_external_memory_concurrently_freed(intptr_t freed) {
+  external_memory_concurrently_freed_ += freed;
+}
+
+void Heap::account_external_memory_concurrently_freed() {
+  isolate()->isolate_data()->external_memory_ -=
+      external_memory_concurrently_freed_;
+  external_memory_concurrently_freed_ = 0;
+}
+
+RootsTable& Heap::roots_table() { return isolate()->roots_table(); }
+
+// TODO(jkummerow): Drop std::remove_pointer after the migration to ObjectPtr.
+#define ROOT_ACCESSOR(Type, name, CamelName)      \
+  Type Heap::name() {                             \
+    return std::remove_pointer<Type>::type::cast( \
+        roots_table()[RootIndex::k##CamelName]);  \
+  }
 MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
 #define ROOT_ACCESSOR(type, name, CamelName)                                   \
-  void Heap::set_##name(type* value) {                                         \
+  void Heap::set_##name(type value) {                                          \
     /* The deserializer makes use of the fact that these common roots are */   \
     /* never in new space and never on a page that is being compacted.    */   \
     DCHECK_IMPLIES(deserialization_complete(),                                 \
                    !RootsTable::IsImmortalImmovable(RootIndex::k##CamelName)); \
     DCHECK_IMPLIES(RootsTable::IsImmortalImmovable(RootIndex::k##CamelName),   \
                    IsImmovable(HeapObject::cast(value)));                      \
-    roots_[RootIndex::k##CamelName] = value;                                   \
+    roots_table()[RootIndex::k##CamelName] = value;                            \
   }
 ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
+
+void Heap::SetRootCodeStubs(SimpleNumberDictionary* value) {
+  roots_table()[RootIndex::kCodeStubs] = value;
+}
+
+void Heap::SetRootMaterializedObjects(FixedArray* objects) {
+  roots_table()[RootIndex::kMaterializedObjects] = objects;
+}
+
+void Heap::SetRootScriptList(Object* value) {
+  roots_table()[RootIndex::kScriptList] = value;
+}
+
+void Heap::SetRootStringTable(StringTable* value) {
+  roots_table()[RootIndex::kStringTable] = value;
+}
+
+void Heap::SetRootNoScriptSharedFunctionInfos(Object* value) {
+  roots_table()[RootIndex::kNoScriptSharedFunctionInfos] = value;
+}
+
+void Heap::SetMessageListeners(TemplateList* value) {
+  roots_table()[RootIndex::kMessageListeners] = value;
+}
 
 PagedSpace* Heap::paged_space(int idx) {
   DCHECK_NE(idx, LO_SPACE);
@@ -324,7 +379,7 @@ bool Heap::InNewSpace(Object* object) {
 }
 
 // static
-bool Heap::InNewSpace(MaybeObject* object) {
+bool Heap::InNewSpace(MaybeObject object) {
   HeapObject* heap_object;
   return object->GetHeapObject(&heap_object) && InNewSpace(heap_object);
 }
@@ -346,13 +401,28 @@ bool Heap::InNewSpace(HeapObject* heap_object) {
 }
 
 // static
+bool Heap::InNewSpace(HeapObjectPtr heap_object) {
+  bool result = MemoryChunk::FromHeapObject(heap_object)->InNewSpace();
+#ifdef DEBUG
+  // If in NEW_SPACE, then check we're either not in the middle of GC or the
+  // object is in to-space.
+  if (result) {
+    // If the object is in NEW_SPACE, then it's not in RO_SPACE so this is safe.
+    Heap* heap = Heap::FromWritableHeapObject(&heap_object);
+    DCHECK(heap->gc_state_ != NOT_IN_GC || InToSpace(heap_object));
+  }
+#endif
+  return result;
+}
+
+// static
 bool Heap::InFromSpace(Object* object) {
   DCHECK(!HasWeakHeapObjectTag(object));
   return object->IsHeapObject() && InFromSpace(HeapObject::cast(object));
 }
 
 // static
-bool Heap::InFromSpace(MaybeObject* object) {
+bool Heap::InFromSpace(MaybeObject object) {
   HeapObject* heap_object;
   return object->GetHeapObject(&heap_object) && InFromSpace(heap_object);
 }
@@ -370,13 +440,18 @@ bool Heap::InToSpace(Object* object) {
 }
 
 // static
-bool Heap::InToSpace(MaybeObject* object) {
+bool Heap::InToSpace(MaybeObject object) {
   HeapObject* heap_object;
   return object->GetHeapObject(&heap_object) && InToSpace(heap_object);
 }
 
 // static
 bool Heap::InToSpace(HeapObject* heap_object) {
+  return MemoryChunk::FromHeapObject(heap_object)->IsFlagSet(Page::IN_TO_SPACE);
+}
+
+// static
+bool Heap::InToSpace(HeapObjectPtr heap_object) {
   return MemoryChunk::FromHeapObject(heap_object)->IsFlagSet(Page::IN_TO_SPACE);
 }
 
@@ -407,6 +482,19 @@ Heap* Heap::FromWritableHeapObject(const HeapObject* obj) {
   return heap;
 }
 
+// static
+Heap* Heap::FromWritableHeapObject(const HeapObjectPtr* obj) {
+  MemoryChunk* chunk = MemoryChunk::FromHeapObject(*obj);
+  // RO_SPACE can be shared between heaps, so we can't use RO_SPACE objects to
+  // find a heap. The exception is when the ReadOnlySpace is writeable, during
+  // bootstrapping, so explicitly allow this case.
+  SLOW_DCHECK(chunk->owner()->identity() != RO_SPACE ||
+              static_cast<ReadOnlySpace*>(chunk->owner())->writable());
+  Heap* heap = chunk->heap();
+  SLOW_DCHECK(heap != nullptr);
+  return heap;
+}
+
 bool Heap::ShouldBePromoted(Address old_address) {
   Page* page = Page::FromAddress(old_address);
   Address age_mark = new_space_->age_mark();
@@ -415,8 +503,7 @@ bool Heap::ShouldBePromoted(Address old_address) {
 }
 
 void Heap::CopyBlock(Address dst, Address src, int byte_size) {
-  CopyWords(reinterpret_cast<Object**>(dst), reinterpret_cast<Object**>(src),
-            static_cast<size_t>(byte_size / kPointerSize));
+  CopyWords(dst, src, static_cast<size_t>(byte_size / kPointerSize));
 }
 
 template <Heap::FindMementoMode mode>
@@ -503,12 +590,6 @@ void Heap::UpdateAllocationSite(Map* map, HeapObject* object,
   (*pretenuring_feedback)[reinterpret_cast<AllocationSite*>(key)]++;
 }
 
-Isolate* Heap::isolate() {
-  return reinterpret_cast<Isolate*>(
-      reinterpret_cast<intptr_t>(this) -
-      reinterpret_cast<size_t>(reinterpret_cast<Isolate*>(16)->heap()) + 16);
-}
-
 void Heap::ExternalStringTable::AddString(String* string) {
   DCHECK(string->IsExternalString());
   DCHECK(!Contains(string));
@@ -527,7 +608,8 @@ Oddball* Heap::ToBoolean(bool condition) {
 
 uint64_t Heap::HashSeed() {
   uint64_t seed;
-  hash_seed()->copy_out(0, reinterpret_cast<byte*>(&seed), kInt64Size);
+  ReadOnlyRoots(this).hash_seed()->copy_out(0, reinterpret_cast<byte*>(&seed),
+                                            kInt64Size);
   DCHECK(FLAG_randomize_hashes || seed == 0);
   return seed;
 }

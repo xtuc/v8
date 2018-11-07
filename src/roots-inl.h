@@ -7,7 +7,9 @@
 
 #include "src/roots.h"
 
+#include "src/handles.h"
 #include "src/heap/heap-inl.h"
+#include "src/objects/slots.h"
 
 namespace v8 {
 namespace internal {
@@ -23,18 +25,42 @@ V8_INLINE RootIndex operator++(RootIndex& index) {
   return index;
 }
 
-ReadOnlyRoots::ReadOnlyRoots(Heap* heap) : roots_table_(heap->roots_table()) {}
+bool RootsTable::IsRootHandleLocation(Address* handle_location,
+                                      RootIndex* index) const {
+  ObjectSlot location(handle_location);
+  ObjectSlot first_root(&roots_[0]);
+  ObjectSlot last_root(&roots_[kEntriesCount]);
+  if (location >= last_root) return false;
+  if (location < first_root) return false;
+  *index = static_cast<RootIndex>(location - first_root);
+  return true;
+}
+
+template <typename T>
+bool RootsTable::IsRootHandle(Handle<T> handle, RootIndex* index) const {
+  // This can't use handle.location() because it is called from places
+  // where handle dereferencing is disallowed. Comparing the handle's
+  // location against the root handle list is safe though.
+  Address* handle_location = reinterpret_cast<Address*>(handle.address());
+  return IsRootHandleLocation(handle_location, index);
+}
+
+ReadOnlyRoots::ReadOnlyRoots(Heap* heap)
+    : roots_table_(heap->isolate()->roots_table()) {}
 
 ReadOnlyRoots::ReadOnlyRoots(Isolate* isolate)
-    : roots_table_(isolate->heap()->roots_table()) {}
+    : roots_table_(isolate->roots_table()) {}
 
-#define ROOT_ACCESSOR(type, name, CamelName)                       \
-  type* ReadOnlyRoots::name() {                                    \
-    return type::cast(roots_table_[RootIndex::k##CamelName]);      \
-  }                                                                \
-  Handle<type> ReadOnlyRoots::name##_handle() {                    \
-    return Handle<type>(                                           \
-        bit_cast<type**>(&roots_table_[RootIndex::k##CamelName])); \
+// TODO(jkummerow): Drop std::remove_pointer after the migration to ObjectPtr.
+#define ROOT_ACCESSOR(Type, name, CamelName)                             \
+  Type ReadOnlyRoots::name() const {                                     \
+    return std::remove_pointer<Type>::type::cast(                        \
+        roots_table_[RootIndex::k##CamelName]);                          \
+  }                                                                      \
+  Handle<std::remove_pointer<Type>::type> ReadOnlyRoots::name##_handle() \
+      const {                                                            \
+    return Handle<std::remove_pointer<Type>::type>(                      \
+        bit_cast<Address*>(&roots_table_[RootIndex::k##CamelName]));     \
   }
 
 READ_ONLY_ROOT_LIST(ROOT_ACCESSOR)

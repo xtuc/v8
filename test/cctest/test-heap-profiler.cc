@@ -3656,6 +3656,51 @@ TEST(SamplingHeapProfilerApiAllocation) {
   heap_profiler->StopSamplingHeapProfiler();
 }
 
+TEST(SamplingHeapProfilerApiSamples) {
+  v8::HandleScope scope(v8::Isolate::GetCurrent());
+  LocalContext env;
+  v8::HeapProfiler* heap_profiler = env->GetIsolate()->GetHeapProfiler();
+
+  // Suppress randomness to avoid flakiness in tests.
+  v8::internal::FLAG_sampling_heap_profiler_suppress_randomness = true;
+
+  heap_profiler->StartSamplingHeapProfiler(1024);
+
+  size_t count = 8 * 1024;
+  for (size_t i = 0; i < count; ++i) v8::Object::New(env->GetIsolate());
+
+  std::unique_ptr<v8::AllocationProfile> profile(
+      heap_profiler->GetAllocationProfile());
+  CHECK(profile);
+
+  std::vector<v8::AllocationProfile::Node*> nodes_to_visit;
+  std::unordered_set<uint32_t> node_ids;
+  nodes_to_visit.push_back(profile->GetRootNode());
+  while (!nodes_to_visit.empty()) {
+    v8::AllocationProfile::Node* node = nodes_to_visit.back();
+    nodes_to_visit.pop_back();
+    CHECK_LT(0, node->node_id);
+    CHECK_EQ(0, node_ids.count(node->node_id));
+    node_ids.insert(node->node_id);
+    nodes_to_visit.insert(nodes_to_visit.end(), node->children.begin(),
+                          node->children.end());
+  }
+
+  size_t total_size = 0;
+  std::unordered_set<uint64_t> samples_set;
+  for (auto& sample : profile->GetSamples()) {
+    total_size += sample.size * sample.count;
+    CHECK_EQ(0, samples_set.count(sample.sample_id));
+    CHECK_EQ(1, node_ids.count(sample.node_id));
+    CHECK_GT(sample.node_id, 0);
+    CHECK_GT(sample.sample_id, 0);
+    samples_set.insert(sample.sample_id);
+  }
+  size_t object_size = total_size / count;
+  CHECK_GE(object_size, sizeof(void*) * 2);
+  heap_profiler->StopSamplingHeapProfiler();
+}
+
 TEST(SamplingHeapProfilerLeftTrimming) {
   v8::HandleScope scope(v8::Isolate::GetCurrent());
   LocalContext env;
@@ -3874,4 +3919,46 @@ TEST(WeakReference) {
   v8::HeapProfiler* heap_profiler = isolate->GetHeapProfiler();
   const v8::HeapSnapshot* snapshot = heap_profiler->TakeHeapSnapshot();
   CHECK(ValidateSnapshot(snapshot));
+}
+
+TEST(Bug8373_1) {
+  LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  v8::HeapProfiler* heap_profiler = env->GetIsolate()->GetHeapProfiler();
+
+  heap_profiler->StartSamplingHeapProfiler(100);
+
+  heap_profiler->TakeHeapSnapshot();
+  // Causes the StringsStorage to be deleted.
+  heap_profiler->DeleteAllHeapSnapshots();
+
+  // Triggers an allocation sample that tries to use the StringsStorage.
+  for (int i = 0; i < 2 * 1024; ++i) {
+    CompileRun(
+        "new Array(64);"
+        "new Uint8Array(16);");
+  }
+
+  heap_profiler->StopSamplingHeapProfiler();
+}
+
+TEST(Bug8373_2) {
+  LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  v8::HeapProfiler* heap_profiler = env->GetIsolate()->GetHeapProfiler();
+
+  heap_profiler->StartTrackingHeapObjects(true);
+
+  heap_profiler->TakeHeapSnapshot();
+  // Causes the StringsStorage to be deleted.
+  heap_profiler->DeleteAllHeapSnapshots();
+
+  // Triggers an allocations that try to use the StringsStorage.
+  for (int i = 0; i < 2 * 1024; ++i) {
+    CompileRun(
+        "new Array(64);"
+        "new Uint8Array(16);");
+  }
+
+  heap_profiler->StopTrackingHeapObjects();
 }

@@ -11,6 +11,7 @@
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/osr.h"
 #include "src/heap/heap-inl.h"
+#include "src/objects/smi.h"
 #include "src/optimized-compilation-info.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
@@ -206,7 +207,8 @@ class OutOfLineTruncateDoubleToI final : public OutOfLineCode {
     __ Movsd(MemOperand(rsp, 0), input_);
     if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
       // A direct call to a wasm runtime stub defined in this module.
-      // Just encode the stub index. This will be patched at relocation.
+      // Just encode the stub index. This will be patched when the code
+      // is added to the native module and copied into wasm code space.
       __ near_call(wasm::WasmCode::kDoubleToI, RelocInfo::WASM_STUB_CALL);
     } else {
       __ Call(BUILTIN_CODE(isolate_, DoubleToI), RelocInfo::CODE_TARGET);
@@ -231,7 +233,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
  public:
   OutOfLineRecordWrite(CodeGenerator* gen, Register object, Operand operand,
                        Register value, Register scratch0, Register scratch1,
-                       RecordWriteMode mode)
+                       RecordWriteMode mode, StubCallMode stub_mode)
       : OutOfLineCode(gen),
         object_(object),
         operand_(operand),
@@ -239,6 +241,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
         scratch0_(scratch0),
         scratch1_(scratch1),
         mode_(mode),
+        stub_mode_(stub_mode),
         zone_(gen->zone()) {}
 
   void Generate() final {
@@ -256,8 +259,16 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
     SaveFPRegsMode const save_fp_mode =
         frame()->DidAllocateDoubleRegisters() ? kSaveFPRegs : kDontSaveFPRegs;
 
-    __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
-                           save_fp_mode);
+    if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
+      // A direct call to a wasm runtime stub defined in this module.
+      // Just encode the stub index. This will be patched when the code
+      // is added to the native module and copied into wasm code space.
+      __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
+                             save_fp_mode, wasm::WasmCode::kWasmRecordWrite);
+    } else {
+      __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
+                             save_fp_mode);
+    }
   }
 
  private:
@@ -267,6 +278,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
   Register const scratch0_;
   Register const scratch1_;
   RecordWriteMode const mode_;
+  StubCallMode const stub_mode_;
   Zone* zone_;
 };
 
@@ -303,7 +315,8 @@ class WasmOutOfLineTrap : public OutOfLineCode {
     } else {
       gen_->AssembleSourcePosition(instr_);
       // A direct call to a wasm runtime stub defined in this module.
-      // Just encode the stub index. This will be patched at relocation.
+      // Just encode the stub index. This will be patched when the code
+      // is added to the native module and copied into wasm code space.
       __ near_call(static_cast<Address>(trap_id), RelocInfo::WASM_STUB_CALL);
       ReferenceMap* reference_map =
           new (gen_->zone()) ReferenceMap(gen_->zone());
@@ -952,8 +965,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       Register value = i.InputRegister(index);
       Register scratch0 = i.TempRegister(0);
       Register scratch1 = i.TempRegister(1);
-      auto ool = new (zone()) OutOfLineRecordWrite(this, object, operand, value,
-                                                   scratch0, scratch1, mode);
+      auto ool = new (zone())
+          OutOfLineRecordWrite(this, object, operand, value, scratch0, scratch1,
+                               mode, DetermineStubCallMode());
       __ movp(operand, value);
       __ CheckPageFlag(object, scratch0,
                        MemoryChunk::kPointersFromHereAreInterestingMask,
@@ -3310,7 +3324,7 @@ void CodeGenerator::AssembleConstructFrame() {
       }
       __ movp(rcx, FieldOperand(kWasmInstanceRegister,
                                 WasmInstanceObject::kCEntryStubOffset));
-      __ Move(rsi, Smi::kZero);
+      __ Move(rsi, Smi::zero());
       __ CallRuntimeWithCEntry(Runtime::kThrowWasmStackOverflow, rcx);
       ReferenceMap* reference_map = new (zone()) ReferenceMap(zone());
       RecordSafepoint(reference_map, Safepoint::kSimple, 0,
@@ -3435,7 +3449,7 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
   auto MoveConstantToRegister = [&](Register dst, Constant src) {
     switch (src.type()) {
       case Constant::kInt32: {
-        if (RelocInfo::IsWasmPtrReference(src.rmode())) {
+        if (RelocInfo::IsWasmReference(src.rmode())) {
           __ movq(dst, src.ToInt64(), src.rmode());
         } else {
           int32_t value = src.ToInt32();
@@ -3448,7 +3462,7 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
         break;
       }
       case Constant::kInt64:
-        if (RelocInfo::IsWasmPtrReference(src.rmode())) {
+        if (RelocInfo::IsWasmReference(src.rmode())) {
           __ movq(dst, src.ToInt64(), src.rmode());
         } else {
           __ Set(dst, src.ToInt64());
@@ -3485,7 +3499,7 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
   };
   // Helper function to write the given constant to the stack.
   auto MoveConstantToSlot = [&](Operand dst, Constant src) {
-    if (!RelocInfo::IsWasmPtrReference(src.rmode())) {
+    if (!RelocInfo::IsWasmReference(src.rmode())) {
       switch (src.type()) {
         case Constant::kInt32:
           __ movq(dst, Immediate(src.ToInt32()));

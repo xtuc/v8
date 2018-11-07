@@ -102,12 +102,15 @@ let kExternalException = 4;
 let kTableZero = 0;
 let kMemoryZero = 0;
 
+let kExceptionAttribute = 0;
+
 // Useful signatures
 let kSig_i_i = makeSig([kWasmI32], [kWasmI32]);
 let kSig_l_l = makeSig([kWasmI64], [kWasmI64]);
 let kSig_i_l = makeSig([kWasmI64], [kWasmI32]);
 let kSig_i_ii = makeSig([kWasmI32, kWasmI32], [kWasmI32]);
 let kSig_i_iii = makeSig([kWasmI32, kWasmI32, kWasmI32], [kWasmI32]);
+let kSig_v_iiii = makeSig([kWasmI32, kWasmI32, kWasmI32, kWasmI32], []);
 let kSig_d_dd = makeSig([kWasmF64, kWasmF64], [kWasmF64]);
 let kSig_l_ll = makeSig([kWasmI64, kWasmI64], [kWasmI64]);
 let kSig_i_dd = makeSig([kWasmF64, kWasmF64], [kWasmI32]);
@@ -172,6 +175,7 @@ let kExprElse = 0x05;
 let kExprTry = 0x06;
 let kExprCatch = 0x07;
 let kExprThrow = 0x08;
+let kExprRethrow = 0x09;
 let kExprCatchAll = 0x0a;
 let kExprEnd = 0x0b;
 let kExprBr = 0x0c;
@@ -216,7 +220,7 @@ let kExprI64StoreMem8 = 0x3c;
 let kExprI64StoreMem16 = 0x3d;
 let kExprI64StoreMem32 = 0x3e;
 let kExprMemorySize = 0x3f;
-let kExprGrowMemory = 0x40;
+let kExprMemoryGrow = 0x40;
 let kExprI32Eqz = 0x45;
 let kExprI32Eq = 0x46;
 let kExprI32Ne = 0x47;
@@ -369,9 +373,9 @@ let kExprI32AtomicXor16U = 0x3d;
 let kExprI32AtomicExchange = 0x41;
 let kExprI32AtomicExchange8U = 0x43;
 let kExprI32AtomicExchange16U = 0x44;
-let kExprI32AtomicCompareExchange = 0x48
-let kExprI32AtomicCompareExchange8U = 0x4a
-let kExprI32AtomicCompareExchange16U = 0x4b
+let kExprI32AtomicCompareExchange = 0x48;
+let kExprI32AtomicCompareExchange8U = 0x4a;
+let kExprI32AtomicCompareExchange16U = 0x4b;
 
 let kExprI64AtomicLoad = 0x11;
 let kExprI64AtomicLoad8U = 0x14;

@@ -7,6 +7,8 @@
 #include "src/counters.h"
 #include "src/objects-inl.h"
 #include "src/objects/js-array-inl.h"
+#include "src/objects/slots.h"
+#include "src/objects/smi.h"
 #include "src/regexp/jsregexp-inl.h"
 #include "src/regexp/regexp-utils.h"
 #include "src/runtime/runtime-utils.h"
@@ -340,6 +342,7 @@ RUNTIME_FUNCTION(Runtime_StringBuilderConcat) {
   }
 }
 
+// TODO(pwong): Remove once TypedArray.prototype.join() is ported to Torque.
 RUNTIME_FUNCTION(Runtime_StringBuilderJoin) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
@@ -444,6 +447,7 @@ static void WriteRepeatToFlat(String* src, Vector<sinkchar> buffer, int cursor,
   }
 }
 
+// TODO(pwong): Remove once TypedArray.prototype.join() is ported to Torque.
 template <typename Char>
 static void JoinSparseArrayWithSeparator(FixedArray* elements,
                                          int elements_length,
@@ -480,6 +484,7 @@ static void JoinSparseArrayWithSeparator(FixedArray* elements,
   DCHECK(cursor <= buffer.length());
 }
 
+// TODO(pwong): Remove once TypedArray.prototype.join() is ported to Torque.
 RUNTIME_FUNCTION(Runtime_SparseJoinWithSeparator) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
@@ -581,9 +586,10 @@ static int CopyCachedOneByteCharsToArray(Heap* heap, const uint8_t* chars,
     elements->set(i, value, mode);
   }
   if (i < length) {
-    static_assert(Smi::kZero == nullptr,
+    static_assert(Smi::kZero.ptr() == kNullAddress,
                   "Can use memset since Smi::kZero is 0");
-    memset(elements->data_start() + i, 0, kPointerSize * (length - i));
+    memset(elements->RawFieldOfElementAt(i).ToVoidPtr(), 0,
+           kPointerSize * (length - i));
   }
 #ifdef DEBUG
   for (int j = 0; j < length; ++j) {

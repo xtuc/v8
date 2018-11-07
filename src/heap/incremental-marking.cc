@@ -18,6 +18,7 @@
 #include "src/heap/objects-visiting.h"
 #include "src/heap/sweeper.h"
 #include "src/objects/hash-table-inl.h"
+#include "src/objects/slots-inl.h"
 #include "src/tracing/trace-event.h"
 #include "src/v8.h"
 #include "src/visitors.h"
@@ -95,17 +96,17 @@ bool IncrementalMarking::BaseRecordWrite(HeapObject* obj, Object* value) {
   return is_compacting_ && need_recording;
 }
 
-void IncrementalMarking::RecordWriteSlow(HeapObject* obj,
-                                         HeapObjectReference** slot,
+void IncrementalMarking::RecordWriteSlow(HeapObject* obj, HeapObjectSlot slot,
                                          Object* value) {
-  if (BaseRecordWrite(obj, value) && slot != nullptr) {
+  if (BaseRecordWrite(obj, value) && slot.address() != kNullAddress) {
     // Object is not going to be rescanned we need to record the slot.
     heap_->mark_compact_collector()->RecordSlot(obj, slot,
                                                 HeapObject::cast(value));
   }
 }
 
-int IncrementalMarking::RecordWriteFromCode(HeapObject* obj, MaybeObject** slot,
+int IncrementalMarking::RecordWriteFromCode(HeapObject* obj,
+                                            MaybeObjectSlot slot,
                                             Isolate* isolate) {
   DCHECK(obj->IsHeapObject());
   isolate->heap()->incremental_marking()->RecordMaybeWeakWrite(obj, slot,
@@ -217,17 +218,17 @@ class IncrementalMarkingRootMarkingVisitor : public RootVisitor {
       : heap_(incremental_marking->heap()) {}
 
   void VisitRootPointer(Root root, const char* description,
-                        Object** p) override {
+                        ObjectSlot p) override {
     MarkObjectByPointer(p);
   }
 
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override {
-    for (Object** p = start; p < end; p++) MarkObjectByPointer(p);
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override {
+    for (ObjectSlot p = start; p < end; ++p) MarkObjectByPointer(p);
   }
 
  private:
-  void MarkObjectByPointer(Object** p) {
+  void MarkObjectByPointer(ObjectSlot p) {
     Object* obj = *p;
     if (!obj->IsHeapObject()) return;
 
@@ -495,12 +496,12 @@ void IncrementalMarking::RetainMaps() {
   // We do not age and retain disposed maps to avoid memory leaks.
   int number_of_disposed_maps = heap()->number_of_disposed_maps_;
   for (int i = 0; i < length; i += 2) {
-    MaybeObject* value = retained_maps->Get(i);
+    MaybeObject value = retained_maps->Get(i);
     HeapObject* map_heap_object;
     if (!value->GetHeapObjectIfWeak(&map_heap_object)) {
       continue;
     }
-    int age = Smi::ToInt(retained_maps->Get(i + 1)->cast<Smi>());
+    int age = retained_maps->Get(i + 1).ToSmi().value();
     int new_age;
     Map* map = Map::cast(map_heap_object);
     if (i >= number_of_disposed_maps && !map_retaining_is_disabled &&
@@ -574,7 +575,12 @@ void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
   void* minor_marking_state = nullptr;
 #endif  // ENABLE_MINOR_MC
 
-  marking_worklist()->Update([this, filler_map, minor_marking_state](
+  marking_worklist()->Update([
+#ifdef DEBUG
+                              // this is referred inside DCHECK.
+                                 this,
+#endif
+                                 filler_map, minor_marking_state](
                                  HeapObject* obj, HeapObject** out) -> bool {
     DCHECK(obj->IsHeapObject());
     // Only pointers to from space have to be updated.
@@ -647,19 +653,18 @@ T* ForwardingAddress(T* heap_obj) {
 
 void IncrementalMarking::UpdateWeakReferencesAfterScavenge() {
   weak_objects_->weak_references.Update(
-      [](std::pair<HeapObject*, HeapObjectReference**> slot_in,
-         std::pair<HeapObject*, HeapObjectReference**>* slot_out) -> bool {
+      [](std::pair<HeapObject*, HeapObjectSlot> slot_in,
+         std::pair<HeapObject*, HeapObjectSlot>* slot_out) -> bool {
         HeapObject* heap_obj = slot_in.first;
         HeapObject* forwarded = ForwardingAddress(heap_obj);
 
         if (forwarded) {
-          ptrdiff_t distance_to_slot =
-              reinterpret_cast<Address>(slot_in.second) -
-              reinterpret_cast<Address>(slot_in.first);
+          ptrdiff_t distance_to_slot = slot_in.second.address() -
+                                       reinterpret_cast<Address>(slot_in.first);
           Address new_slot =
               reinterpret_cast<Address>(forwarded) + distance_to_slot;
           slot_out->first = forwarded;
-          slot_out->second = reinterpret_cast<HeapObjectReference**>(new_slot);
+          slot_out->second = HeapObjectSlot(new_slot);
           return true;
         }
 
@@ -985,24 +990,18 @@ size_t IncrementalMarking::StepSizeToKeepUpWithAllocations() {
 }
 
 size_t IncrementalMarking::StepSizeToMakeProgress() {
-  // We increase step size gradually based on the time passed in order to
-  // leave marking work to standalone tasks. The ramp up duration and the
-  // target step count are chosen based on benchmarks.
-  const int kRampUpIntervalMs = 300;
   const size_t kTargetStepCount = 256;
   const size_t kTargetStepCountAtOOM = 32;
+  const size_t kMaxStepSizeInByte = 256 * KB;
   size_t oom_slack = heap()->new_space()->Capacity() + 64 * MB;
 
   if (!heap()->CanExpandOldGeneration(oom_slack)) {
     return heap()->OldGenerationSizeOfObjects() / kTargetStepCountAtOOM;
   }
 
-  size_t step_size = Max(initial_old_generation_size_ / kTargetStepCount,
-                         IncrementalMarking::kMinStepSizeInBytes);
-  double time_passed_ms =
-      heap_->MonotonicallyIncreasingTimeInMs() - start_time_ms_;
-  double factor = Min(time_passed_ms / kRampUpIntervalMs, 1.0);
-  return static_cast<size_t>(factor * step_size);
+  return Min(Max(initial_old_generation_size_ / kTargetStepCount,
+                 IncrementalMarking::kMinStepSizeInBytes),
+             kMaxStepSizeInByte);
 }
 
 void IncrementalMarking::AdvanceIncrementalMarkingOnAllocation() {

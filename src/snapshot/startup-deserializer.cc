@@ -9,7 +9,7 @@
 #include "src/code-stubs.h"
 #include "src/code-tracer.h"
 #include "src/heap/heap-inl.h"
-#include "src/snapshot/builtin-deserializer.h"
+#include "src/snapshot/read-only-deserializer.h"
 #include "src/snapshot/snapshot.h"
 
 namespace v8 {
@@ -18,10 +18,11 @@ namespace internal {
 void StartupDeserializer::DeserializeInto(Isolate* isolate) {
   Initialize(isolate);
 
-  BuiltinDeserializer builtin_deserializer(isolate, builtin_data_);
+  ReadOnlyDeserializer read_only_deserializer(read_only_data_);
+  read_only_deserializer.SetRehashability(can_rehash());
+  read_only_deserializer.DeserializeInto(isolate);
 
-  if (!DefaultDeserializerAllocator::ReserveSpace(this,
-                                                  &builtin_deserializer)) {
+  if (!allocator()->ReserveSpace()) {
     V8::FatalProcessOutOfMemory(isolate, "StartupDeserializer");
   }
 
@@ -37,17 +38,12 @@ void StartupDeserializer::DeserializeInto(Isolate* isolate) {
   {
     DisallowHeapAllocation no_gc;
     isolate->heap()->IterateSmiRoots(this);
-    isolate->heap()->IterateStrongRoots(this,
-                                        VISIT_ONLY_STRONG_FOR_SERIALIZATION);
-    isolate->heap()->RepairFreeListsAfterDeserialization();
+    isolate->heap()->IterateStrongRoots(this, VISIT_FOR_SERIALIZATION);
+    Iterate(isolate, this);
     isolate->heap()->IterateWeakRoots(this, VISIT_FOR_SERIALIZATION);
     DeserializeDeferredObjects();
     RestoreExternalReferenceRedirectors(accessor_infos());
     RestoreExternalReferenceRedirectors(call_handler_infos());
-
-    // Deserialize eager builtins from the builtin snapshot. Note that deferred
-    // objects must have been deserialized prior to this.
-    builtin_deserializer.DeserializeEagerBuiltins();
 
     // Flush the instruction cache for the entire code-space. Must happen after
     // builtins deserialization.
@@ -74,7 +70,11 @@ void StartupDeserializer::DeserializeInto(Isolate* isolate) {
   // to display the builtin names.
   PrintDisassembledCodeObjects();
 
-  if (FLAG_rehash_snapshot && can_rehash()) RehashHeap();
+  if (FLAG_rehash_snapshot && can_rehash()) {
+    isolate->heap()->InitializeHashSeed();
+    read_only_deserializer.RehashHeap();
+    Rehash();
+  }
 }
 
 void StartupDeserializer::FlushICacheForNewIsolate() {
@@ -109,12 +109,6 @@ void StartupDeserializer::PrintDisassembledCodeObjects() {
     }
   }
 #endif
-}
-
-void StartupDeserializer::RehashHeap() {
-  DCHECK(FLAG_rehash_snapshot && can_rehash());
-  isolate()->heap()->InitializeHashSeed();
-  Rehash();
 }
 
 }  // namespace internal

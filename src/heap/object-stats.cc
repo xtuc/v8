@@ -18,6 +18,7 @@
 #include "src/objects/compilation-cache-inl.h"
 #include "src/objects/js-collection-inl.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/objects/slots.h"
 #include "src/objects/templates.h"
 #include "src/utils.h"
 
@@ -66,11 +67,12 @@ class FieldStatsCollector : public ObjectVisitor {
     *raw_fields_count_ += raw_fields_count_in_object;
   }
 
-  void VisitPointers(HeapObject* host, Object** start, Object** end) override {
+  void VisitPointers(HeapObject* host, ObjectSlot start,
+                     ObjectSlot end) override {
     *tagged_fields_count_ += (end - start);
   }
-  void VisitPointers(HeapObject* host, MaybeObject** start,
-                     MaybeObject** end) override {
+  void VisitPointers(HeapObject* host, MaybeObjectSlot start,
+                     MaybeObjectSlot end) override {
     *tagged_fields_count_ += (end - start);
   }
 
@@ -272,7 +274,7 @@ void ObjectStats::Dump(std::stringstream& stream) {
 }
 
 void ObjectStats::CheckpointObjectStats() {
-  base::LockGuard<base::Mutex> lock_guard(object_stats_mutex.Pointer());
+  base::MutexGuard lock_guard(object_stats_mutex.Pointer());
   MemCopy(object_counts_last_time_, object_counts_, sizeof(object_counts_));
   MemCopy(object_sizes_last_time_, object_sizes_, sizeof(object_sizes_));
   ClearObjectStats();
@@ -471,7 +473,7 @@ void ObjectStatsCollectorImpl::RecordVirtualAllocationSiteDetails(
     if (boilerplate->HasFastProperties()) {
       // We'll mis-classify the empty_property_array here. Given that there is a
       // single instance, this is negligible.
-      PropertyArray* properties = boilerplate->property_array();
+      PropertyArray properties = boilerplate->property_array();
       RecordSimpleVirtualObjectStats(
           site, properties, ObjectStats::BOILERPLATE_PROPERTY_ARRAY_TYPE);
     } else {
@@ -518,12 +520,12 @@ void ObjectStatsCollectorImpl::RecordVirtualJSCollectionDetails(
   if (object->IsJSMap()) {
     RecordSimpleVirtualObjectStats(
         object, FixedArray::cast(JSMap::cast(object)->table()),
-        ObjectStats::JS_COLLETION_TABLE_TYPE);
+        ObjectStats::JS_COLLECTION_TABLE_TYPE);
   }
   if (object->IsJSSet()) {
     RecordSimpleVirtualObjectStats(
         object, FixedArray::cast(JSSet::cast(object)->table()),
-        ObjectStats::JS_COLLETION_TABLE_TYPE);
+        ObjectStats::JS_COLLECTION_TABLE_TYPE);
   }
 }
 
@@ -533,7 +535,7 @@ void ObjectStatsCollectorImpl::RecordVirtualJSObjectDetails(JSObject* object) {
 
   // Properties.
   if (object->HasFastProperties()) {
-    PropertyArray* properties = object->property_array();
+    PropertyArray properties = object->property_array();
     CHECK_EQ(PROPERTY_ARRAY_TYPE, properties->map()->instance_type());
   } else {
     NameDictionary* properties = object->property_dictionary();
@@ -546,7 +548,7 @@ void ObjectStatsCollectorImpl::RecordVirtualJSObjectDetails(JSObject* object) {
 }
 
 static ObjectStats::VirtualInstanceType GetFeedbackSlotType(
-    MaybeObject* maybe_obj, FeedbackSlotKind kind, Isolate* isolate) {
+    MaybeObject maybe_obj, FeedbackSlotKind kind, Isolate* isolate) {
   if (maybe_obj->IsCleared())
     return ObjectStats::FEEDBACK_VECTOR_SLOT_OTHER_TYPE;
   Object* obj = maybe_obj->GetHeapObjectOrSmi();
@@ -600,8 +602,7 @@ void ObjectStatsCollectorImpl::RecordVirtualFeedbackVectorDetails(
     size_t calculated_size = 0;
 
     // Log the feedback vector's header (fixed fields).
-    size_t header_size =
-        reinterpret_cast<Address>(vector->slots_start()) - vector->address();
+    size_t header_size = vector->slots_start().address() - vector->address();
     stats_->RecordVirtualObjectStats(ObjectStats::FEEDBACK_VECTOR_HEADER_TYPE,
                                      header_size,
                                      ObjectStats::kNoOverAllocation);
@@ -622,7 +623,7 @@ void ObjectStatsCollectorImpl::RecordVirtualFeedbackVectorDetails(
 
       // Log the monomorphic/polymorphic helper objects that this slot owns.
       for (int i = 0; i < it.entry_size(); i++) {
-        MaybeObject* raw_object = vector->get(slot.ToInt() + i);
+        MaybeObject raw_object = vector->get(slot.ToInt() + i);
         HeapObject* object;
         if (raw_object->GetHeapObject(&object)) {
           if (object->IsCell() || object->IsWeakFixedArray()) {

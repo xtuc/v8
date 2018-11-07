@@ -175,20 +175,17 @@ enum DispatchTableElements : int {
 // static
 Handle<WasmModuleObject> WasmModuleObject::New(
     Isolate* isolate, const wasm::WasmFeatures& enabled,
-    std::shared_ptr<const wasm::WasmModule> shared_module, wasm::ModuleEnv& env,
+    std::shared_ptr<const wasm::WasmModule> shared_module,
     OwnedVector<const uint8_t> wire_bytes, Handle<Script> script,
     Handle<ByteArray> asm_js_offset_table) {
-  DCHECK_EQ(shared_module.get(), env.module);
-
   // Create a new {NativeModule} first.
   size_t native_memory_estimate =
       isolate->wasm_engine()->code_manager()->EstimateNativeModuleSize(
-          env.module);
+          shared_module.get());
   auto native_module = isolate->wasm_engine()->code_manager()->NewNativeModule(
       isolate, enabled, native_memory_estimate,
-      wasm::NativeModule::kCanAllocateMoreMemory, std::move(shared_module),
-      env);
-  native_module->set_wire_bytes(std::move(wire_bytes));
+      wasm::NativeModule::kCanAllocateMoreMemory, std::move(shared_module));
+  native_module->SetWireBytes(std::move(wire_bytes));
   native_module->SetRuntimeStubs(isolate);
 
   // Delegate to the shared {WasmModuleObject::New} allocator.
@@ -257,7 +254,7 @@ bool WasmModuleObject::SetBreakPoint(Handle<WasmModuleObject> module_object,
   Handle<WeakArrayList> weak_instance_list(module_object->weak_instance_list(),
                                            isolate);
   for (int i = 0; i < weak_instance_list->length(); ++i) {
-    MaybeObject* maybe_instance = weak_instance_list->Get(i);
+    MaybeObject maybe_instance = weak_instance_list->Get(i);
     if (maybe_instance->IsWeak()) {
       Handle<WasmInstanceObject> instance(
           WasmInstanceObject::cast(maybe_instance->GetHeapObjectAssumeWeak()),
@@ -412,25 +409,24 @@ Handle<ByteArray> GetDecodedAsmJsOffsetTable(
   DCHECK(table_type == Encoded || table_type == Decoded);
   if (table_type == Decoded) return offset_table;
 
-  wasm::AsmJsOffsetsResult asm_offsets;
+  wasm::AsmJsOffsets asm_offsets;
   {
     DisallowHeapAllocation no_gc;
     byte* bytes_start = offset_table->GetDataStartAddress();
     byte* bytes_end = reinterpret_cast<byte*>(
         reinterpret_cast<Address>(bytes_start) + offset_table->length() - 1);
-    asm_offsets = wasm::DecodeAsmJsOffsets(bytes_start, bytes_end);
+    asm_offsets = wasm::DecodeAsmJsOffsets(bytes_start, bytes_end).value();
   }
   // Wasm bytes must be valid and must contain asm.js offset table.
-  DCHECK(asm_offsets.ok());
-  DCHECK_GE(kMaxInt, asm_offsets.val.size());
-  int num_functions = static_cast<int>(asm_offsets.val.size());
+  DCHECK_GE(kMaxInt, asm_offsets.size());
+  int num_functions = static_cast<int>(asm_offsets.size());
   int num_imported_functions =
       static_cast<int>(module_object->module()->num_imported_functions);
   DCHECK_EQ(module_object->module()->functions.size(),
             static_cast<size_t>(num_functions) + num_imported_functions);
   int num_entries = 0;
   for (int func = 0; func < num_functions; ++func) {
-    size_t new_size = asm_offsets.val[func].size();
+    size_t new_size = asm_offsets[func].size();
     DCHECK_LE(new_size, static_cast<size_t>(kMaxInt) - num_entries);
     num_entries += static_cast<int>(new_size);
   }
@@ -447,8 +443,7 @@ Handle<ByteArray> GetDecodedAsmJsOffsetTable(
   const std::vector<WasmFunction>& wasm_funs =
       module_object->module()->functions;
   for (int func = 0; func < num_functions; ++func) {
-    std::vector<wasm::AsmJsOffsetEntry>& func_asm_offsets =
-        asm_offsets.val[func];
+    std::vector<wasm::AsmJsOffsetEntry>& func_asm_offsets = asm_offsets[func];
     if (func_asm_offsets.empty()) continue;
     int func_offset = wasm_funs[num_imported_functions + func].code.offset();
     for (wasm::AsmJsOffsetEntry& e : func_asm_offsets) {
@@ -878,24 +873,24 @@ void WasmTableObject::ClearDispatchTables(Isolate* isolate,
 }
 
 namespace {
-MaybeHandle<JSArrayBuffer> GrowMemoryBuffer(Isolate* isolate,
+MaybeHandle<JSArrayBuffer> MemoryGrowBuffer(Isolate* isolate,
                                             Handle<JSArrayBuffer> old_buffer,
                                             uint32_t pages,
                                             uint32_t maximum_pages) {
+  CHECK_GE(wasm::max_mem_pages(), maximum_pages);
   if (!old_buffer->is_growable()) return {};
   void* old_mem_start = old_buffer->backing_store();
   size_t old_size = old_buffer->byte_length();
-  CHECK_GE(wasm::kV8MaxWasmMemoryBytes, old_size);
   CHECK_EQ(0, old_size % wasm::kWasmPageSize);
   size_t old_pages = old_size / wasm::kWasmPageSize;
-  if (old_pages > maximum_pages ||            // already reached maximum
-      (pages > maximum_pages - old_pages) ||  // exceeds remaining
-      (pages > FLAG_wasm_max_mem_pages - old_pages)) {  // exceeds limit
+  CHECK_GE(wasm::max_mem_pages(), old_pages);
+
+  if ((pages > maximum_pages - old_pages) ||          // exceeds remaining
+      (pages > wasm::max_mem_pages() - old_pages)) {  // exceeds limit
     return {};
   }
   size_t new_size =
       static_cast<size_t>(old_pages + pages) * wasm::kWasmPageSize;
-  CHECK_GE(wasm::kV8MaxWasmMemoryBytes, new_size);
 
   // Reusing the backing store from externalized buffers causes problems with
   // Blink's array buffers. The connection between the two is lost, which can
@@ -1055,12 +1050,12 @@ int32_t WasmMemoryObject::Grow(Isolate* isolate,
   DCHECK_EQ(0, old_size % wasm::kWasmPageSize);
   Handle<JSArrayBuffer> new_buffer;
 
-  uint32_t maximum_pages = FLAG_wasm_max_mem_pages;
+  uint32_t maximum_pages = wasm::max_mem_pages();
   if (memory_object->has_maximum_pages()) {
-    maximum_pages = Min(FLAG_wasm_max_mem_pages,
-                        static_cast<uint32_t>(memory_object->maximum_pages()));
+    maximum_pages = std::min(
+        maximum_pages, static_cast<uint32_t>(memory_object->maximum_pages()));
   }
-  if (!GrowMemoryBuffer(isolate, old_buffer, pages, maximum_pages)
+  if (!MemoryGrowBuffer(isolate, old_buffer, pages, maximum_pages)
            .ToHandle(&new_buffer)) {
     return -1;
   }
@@ -1068,7 +1063,7 @@ int32_t WasmMemoryObject::Grow(Isolate* isolate,
   if (memory_object->has_instances()) {
     Handle<WeakArrayList> instances(memory_object->instances(), isolate);
     for (int i = 0; i < instances->length(); i++) {
-      MaybeObject* elem = instances->Get(i);
+      MaybeObject elem = instances->Get(i);
       HeapObject* heap_object;
       if (elem->GetHeapObjectIfWeak(&heap_object)) {
         Handle<WasmInstanceObject> instance(
@@ -1225,7 +1220,7 @@ bool WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
 }
 
 void WasmInstanceObject::SetRawMemory(byte* mem_start, size_t mem_size) {
-  CHECK_LE(mem_size, wasm::kV8MaxWasmMemoryBytes);
+  CHECK_LE(mem_size, wasm::max_mem_bytes());
 #if V8_HOST_ARCH_64_BIT
   uint64_t mem_mask64 = base::bits::RoundUpToPowerOfTwo64(mem_size) - 1;
   set_memory_start(mem_start);
@@ -1287,8 +1282,7 @@ Handle<WasmInstanceObject> WasmInstanceObject::New(
   instance->set_centry_stub(*centry_stub);
 
   instance->SetRawMemory(nullptr, 0);
-  instance->set_roots_array_address(
-      reinterpret_cast<Address>(isolate->heap()->roots_array_start()));
+  instance->set_isolate_root(isolate->isolate_root());
   instance->set_stack_limit_address(
       isolate->stack_guard()->address_of_jslimit());
   instance->set_real_stack_limit_address(

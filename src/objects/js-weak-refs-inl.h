@@ -9,6 +9,7 @@
 
 #include "src/api-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects/smi-inl.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -16,23 +17,48 @@
 namespace v8 {
 namespace internal {
 
+ACCESSORS(JSWeakFactory, native_context, Context, kNativeContextOffset)
 ACCESSORS(JSWeakFactory, cleanup, Object, kCleanupOffset)
 ACCESSORS(JSWeakFactory, active_cells, Object, kActiveCellsOffset)
 ACCESSORS(JSWeakFactory, cleared_cells, Object, kClearedCellsOffset)
+SMI_ACCESSORS(JSWeakFactory, flags, kFlagsOffset)
 ACCESSORS(JSWeakFactory, next, Object, kNextOffset)
 CAST_ACCESSOR(JSWeakFactory)
 
-ACCESSORS(JSWeakCell, factory, JSWeakFactory, kFactoryOffset)
+ACCESSORS(JSWeakCell, factory, Object, kFactoryOffset)
 ACCESSORS(JSWeakCell, target, Object, kTargetOffset)
+ACCESSORS(JSWeakCell, holdings, Object, kHoldingsOffset)
 ACCESSORS(JSWeakCell, next, Object, kNextOffset)
 ACCESSORS(JSWeakCell, prev, Object, kPrevOffset)
 CAST_ACCESSOR(JSWeakCell)
 
+CAST_ACCESSOR(JSWeakRef)
+
 ACCESSORS(JSWeakFactoryCleanupIterator, factory, JSWeakFactory, kFactoryOffset)
 CAST_ACCESSOR(JSWeakFactoryCleanupIterator)
 
+ACCESSORS(WeakFactoryCleanupJobTask, factory, JSWeakFactory, kFactoryOffset)
+CAST_ACCESSOR(WeakFactoryCleanupJobTask)
+
+void JSWeakFactory::AddWeakCell(JSWeakCell* weak_cell) {
+  weak_cell->set_factory(this);
+  weak_cell->set_next(active_cells());
+  if (active_cells()->IsJSWeakCell()) {
+    JSWeakCell::cast(active_cells())->set_prev(weak_cell);
+  }
+  set_active_cells(weak_cell);
+}
+
 bool JSWeakFactory::NeedsCleanup() const {
   return cleared_cells()->IsJSWeakCell();
+}
+
+bool JSWeakFactory::scheduled_for_cleanup() const {
+  return ScheduledForCleanupField::decode(flags());
+}
+
+void JSWeakFactory::set_scheduled_for_cleanup(bool scheduled_for_cleanup) {
+  set_flags(ScheduledForCleanupField::update(flags(), scheduled_for_cleanup));
 }
 
 JSWeakCell* JSWeakFactory::PopClearedCell(Isolate* isolate) {
@@ -53,12 +79,12 @@ JSWeakCell* JSWeakFactory::PopClearedCell(Isolate* isolate) {
 
 void JSWeakCell::Nullify(
     Isolate* isolate,
-    std::function<void(HeapObject* object, Object** slot, Object* target)>
+    std::function<void(HeapObject* object, ObjectSlot slot, Object* target)>
         gc_notify_updated_slot) {
   DCHECK(target()->IsJSReceiver());
-  set_target(Smi::kZero);
+  set_target(ReadOnlyRoots(isolate).undefined_value());
 
-  JSWeakFactory* weak_factory = factory();
+  JSWeakFactory* weak_factory = JSWeakFactory::cast(factory());
   // Remove from the JSWeakCell from the "active_cells" list of its
   // JSWeakFactory and insert it into the "cleared" list.
   if (prev()->IsJSWeakCell()) {
@@ -103,13 +129,42 @@ void JSWeakCell::Nullify(
       this);
 }
 
-JSWeakFactoryCleanupTask::JSWeakFactoryCleanupTask(Isolate* isolate)
-    : isolate_(isolate) {
-  Handle<Context> native_context =
-      Handle<Context>::cast(isolate->native_context());
-  Local<v8::Context> native_context_local = Utils::ToLocal(native_context);
-  native_context_.Reset(reinterpret_cast<v8::Isolate*>(isolate),
-                        native_context_local);
+void JSWeakCell::Clear(Isolate* isolate) {
+  // Unlink the JSWeakCell from the list it's in (if any). The JSWeakCell can be
+  // in its JSWeakFactory's active_cells list, cleared_cells list or neither (if
+  // it has been already taken out).
+
+  DCHECK(target()->IsUndefined() || target()->IsJSReceiver());
+  set_target(ReadOnlyRoots(isolate).undefined_value());
+
+  if (factory()->IsJSWeakFactory()) {
+    JSWeakFactory* weak_factory = JSWeakFactory::cast(factory());
+    if (weak_factory->active_cells() == this) {
+      DCHECK(!prev()->IsJSWeakCell());
+      weak_factory->set_active_cells(next());
+    } else if (weak_factory->cleared_cells() == this) {
+      DCHECK(!prev()->IsJSWeakCell());
+      weak_factory->set_cleared_cells(next());
+    } else if (prev()->IsJSWeakCell()) {
+      JSWeakCell* prev_cell = JSWeakCell::cast(prev());
+      prev_cell->set_next(next());
+    }
+    if (next()->IsJSWeakCell()) {
+      JSWeakCell* next_cell = JSWeakCell::cast(next());
+      next_cell->set_prev(prev());
+    }
+    set_prev(ReadOnlyRoots(isolate).undefined_value());
+    set_next(ReadOnlyRoots(isolate).undefined_value());
+
+    set_holdings(ReadOnlyRoots(isolate).undefined_value());
+    set_factory(ReadOnlyRoots(isolate).undefined_value());
+  } else {
+    // Already cleared.
+    DCHECK(next()->IsUndefined(isolate));
+    DCHECK(prev()->IsUndefined(isolate));
+    DCHECK(holdings()->IsUndefined(isolate));
+    DCHECK(factory()->IsUndefined(isolate));
+  }
 }
 
 }  // namespace internal

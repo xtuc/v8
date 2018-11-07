@@ -19,13 +19,12 @@
 #include "src/allocation.h"
 #include "src/assert-scope.h"
 #include "src/base/atomic-utils.h"
-#include "src/external-reference-table.h"
 #include "src/globals.h"
 #include "src/heap-symbols.h"
 #include "src/objects.h"
 #include "src/objects/fixed-array.h"
+#include "src/objects/smi.h"
 #include "src/objects/string-table.h"
-#include "src/roots.h"
 #include "src/visitors.h"
 
 namespace v8 {
@@ -62,10 +61,12 @@ class GCIdleTimeHeapState;
 class GCTracer;
 class HeapController;
 class HeapObjectAllocationTracker;
+class HeapObjectPtr;
 class HeapObjectsFilter;
 class HeapStats;
 class HistogramTimer;
 class Isolate;
+class JSWeakFactory;
 class LocalEmbedderHeapTracer;
 class MemoryAllocator;
 class MemoryReducer;
@@ -81,10 +82,9 @@ class ScavengerCollector;
 class Space;
 class StoreBuffer;
 class StressScavengeObserver;
+class TimedHistogram;
 class TracePossibleWrapperReporter;
 class WeakObjectRetainer;
-
-typedef void (*ObjectSlotCallback)(HeapObject** from, HeapObject* to);
 
 enum ArrayStorageAllocationMode {
   DONT_INITIALIZE_ARRAY_ELEMENTS,
@@ -345,9 +345,6 @@ class Heap {
   inline Address* OldSpaceAllocationTopAddress();
   inline Address* OldSpaceAllocationLimitAddress();
 
-  // FreeSpace objects have a null map after deserialization. Update the map.
-  void RepairFreeListsAfterDeserialization();
-
   // Move len elements within a given array from src_index index to dst_index
   // index.
   void MoveElements(FixedArray* array, int dst_index, int src_index, int len,
@@ -396,7 +393,9 @@ class Heap {
   Object* allocation_sites_list() { return allocation_sites_list_; }
 
   // Used in CreateAllocationSiteStub and the (de)serializer.
-  Object** allocation_sites_list_address() { return &allocation_sites_list_; }
+  Address allocation_sites_list_address() {
+    return reinterpret_cast<Address>(&allocation_sites_list_);
+  }
 
   // Traverse all the allocaions_sites [nested_site and weak_next] in the list
   // and foreach call the visitor
@@ -510,17 +509,10 @@ class Heap {
 
   int64_t external_memory_hard_limit() { return MaxOldGenerationSize() / 2; }
 
-  int64_t external_memory() { return external_memory_; }
-  void update_external_memory(int64_t delta) { external_memory_ += delta; }
-
-  void update_external_memory_concurrently_freed(intptr_t freed) {
-    external_memory_concurrently_freed_ += freed;
-  }
-
-  void account_external_memory_concurrently_freed() {
-    external_memory_ -= external_memory_concurrently_freed_;
-    external_memory_concurrently_freed_ = 0;
-  }
+  V8_INLINE int64_t external_memory();
+  V8_INLINE void update_external_memory(int64_t delta);
+  V8_INLINE void update_external_memory_concurrently_freed(intptr_t freed);
+  V8_INLINE void account_external_memory_concurrently_freed();
 
   size_t backing_store_bytes() const { return backing_store_bytes_; }
 
@@ -641,79 +633,24 @@ class Heap {
   // ===========================================================================
   // Root set access. ==========================================================
   // ===========================================================================
-  friend class ReadOnlyRoots;
 
- public:
-  RootsTable& roots_table() { return roots_; }
+  // Shortcut to the roots table stored in the Isolate.
+  V8_INLINE RootsTable& roots_table();
 
 // Heap root getters.
-#define ROOT_ACCESSOR(type, name, CamelName) inline type* name();
+#define ROOT_ACCESSOR(type, name, CamelName) inline type name();
   MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
-  Object* root(RootIndex index) { return roots_[index]; }
-  Handle<Object> root_handle(RootIndex index) {
-    return Handle<Object>(&roots_[index]);
-  }
-
-  bool IsRootHandleLocation(Object** handle_location, RootIndex* index) const {
-    return roots_.IsRootHandleLocation(handle_location, index);
-  }
-
-  template <typename T>
-  bool IsRootHandle(Handle<T> handle, RootIndex* index) const {
-    return roots_.IsRootHandle(handle, index);
-  }
-
-  // Generated code can embed this address to get access to the roots.
-  Object** roots_array_start() { return roots_.roots_; }
-
-  ExternalReferenceTable* external_reference_table() {
-    DCHECK(external_reference_table_.is_initialized());
-    return &external_reference_table_;
-  }
-
-  static constexpr int roots_to_external_reference_table_offset() {
-    return kRootsExternalReferenceTableOffset;
-  }
-
-  static constexpr int roots_to_builtins_offset() {
-    return kRootsBuiltinsOffset;
-  }
-
-  static constexpr int root_register_addressable_end_offset() {
-    return kRootRegisterAddressableEndOffset;
-  }
-
-  Address root_register_addressable_end() {
-    return reinterpret_cast<Address>(roots_array_start()) +
-           kRootRegisterAddressableEndOffset;
-  }
-
   // Sets the stub_cache_ (only used when expanding the dictionary).
-  void SetRootCodeStubs(SimpleNumberDictionary* value);
+  V8_INLINE void SetRootCodeStubs(SimpleNumberDictionary* value);
+  V8_INLINE void SetRootMaterializedObjects(FixedArray* objects);
+  V8_INLINE void SetRootScriptList(Object* value);
+  V8_INLINE void SetRootStringTable(StringTable* value);
+  V8_INLINE void SetRootNoScriptSharedFunctionInfos(Object* value);
+  V8_INLINE void SetMessageListeners(TemplateList* value);
 
-  void SetRootMaterializedObjects(FixedArray* objects) {
-    roots_[RootIndex::kMaterializedObjects] = objects;
-  }
-
-  void SetRootScriptList(Object* value) {
-    roots_[RootIndex::kScriptList] = value;
-  }
-
-  void SetRootStringTable(StringTable* value) {
-    roots_[RootIndex::kStringTable] = value;
-  }
-
-  void SetRootNoScriptSharedFunctionInfos(Object* value) {
-    roots_[RootIndex::kNoScriptSharedFunctionInfos] = value;
-  }
-
-  void SetMessageListeners(TemplateList* value) {
-    roots_[RootIndex::kMessageListeners] = value;
-  }
-
-  // Set the stack limit in the roots_ array.  Some architectures generate
+  // Set the stack limit in the roots table.  Some architectures generate
   // code that looks here, because it is faster than loading from the static
   // jslimit_/real_jslimit_ variable in the StackGuard.
   void SetStackLimits();
@@ -722,10 +659,19 @@ class Heap {
   // snapshot blob, we need to reset it before serializing.
   void ClearStackLimits();
 
-  void RegisterStrongRoots(Object** start, Object** end);
-  void UnregisterStrongRoots(Object** start);
+  void RegisterStrongRoots(ObjectSlot start, ObjectSlot end);
+  void UnregisterStrongRoots(ObjectSlot start);
 
   void SetBuiltinsConstantsTable(FixedArray* cache);
+
+  // Add weak_factory into the dirty_js_weak_factories list.
+  void AddDirtyJSWeakFactory(
+      JSWeakFactory* weak_factory,
+      std::function<void(HeapObject* object, ObjectSlot slot, Object* target)>
+          gc_notify_updated_slot);
+
+  void AddKeepDuringJobTarget(Handle<JSReceiver> target);
+  void ClearKeepDuringJobSet();
 
   // ===========================================================================
   // Inline allocation. ========================================================
@@ -791,7 +737,14 @@ class Heap {
   // Iterators. ================================================================
   // ===========================================================================
 
+  // None of these methods iterate over the read-only roots. To do this use
+  // ReadOnlyRoots::Iterate. Read-only root iteration is not necessary for
+  // garbage collection and is usually only performed as part of
+  // (de)serialization or heap verification.
+
+  // Iterates over the strong roots and the weak roots.
   void IterateRoots(RootVisitor* v, VisitMode mode);
+  // Iterates over the strong roots.
   void IterateStrongRoots(RootVisitor* v, VisitMode mode);
   // Iterates over entries in the smi roots list.  Only interesting to the
   // serializer/deserializer, since GC does not care about smis.
@@ -818,11 +771,11 @@ class Heap {
   static intptr_t store_buffer_mask_constant();
   static Address store_buffer_overflow_function_address();
 
-  void ClearRecordedSlot(HeapObject* object, Object** slot);
+  void ClearRecordedSlot(HeapObject* object, ObjectSlot slot);
   void ClearRecordedSlotRange(Address start, Address end);
 
 #ifdef DEBUG
-  void VerifyClearedSlot(HeapObject* object, Object** slot);
+  void VerifyClearedSlot(HeapObject* object, ObjectSlot slot);
 #endif
 
   // ===========================================================================
@@ -913,7 +866,7 @@ class Heap {
   EmbedderHeapTracer* GetEmbedderHeapTracer() const;
 
   void TracePossibleWrapper(JSObject* js_object);
-  void RegisterExternallyReferencedObject(Object** object);
+  void RegisterExternallyReferencedObject(Address* location);
   void SetEmbedderStackStateForNextFinalizaton(
       EmbedderHeapTracer::EmbedderStackState stack_state);
 
@@ -934,7 +887,7 @@ class Heap {
   inline void FinalizeExternalString(String* string);
 
   static String* UpdateNewSpaceReferenceInExternalStringTableEntry(
-      Heap* heap, Object** pointer);
+      Heap* heap, ObjectSlot pointer);
 
   // ===========================================================================
   // Methods checking/returning the space of a given object/address. ===========
@@ -942,14 +895,16 @@ class Heap {
 
   // Returns whether the object resides in new space.
   static inline bool InNewSpace(Object* object);
-  static inline bool InNewSpace(MaybeObject* object);
+  static inline bool InNewSpace(MaybeObject object);
   static inline bool InNewSpace(HeapObject* heap_object);
+  static inline bool InNewSpace(HeapObjectPtr heap_object);
   static inline bool InFromSpace(Object* object);
-  static inline bool InFromSpace(MaybeObject* object);
+  static inline bool InFromSpace(MaybeObject object);
   static inline bool InFromSpace(HeapObject* heap_object);
   static inline bool InToSpace(Object* object);
-  static inline bool InToSpace(MaybeObject* object);
+  static inline bool InToSpace(MaybeObject object);
   static inline bool InToSpace(HeapObject* heap_object);
+  static inline bool InToSpace(HeapObjectPtr heap_object);
 
   // Returns whether the object resides in old space.
   inline bool InOldSpace(Object* object);
@@ -975,6 +930,11 @@ class Heap {
   // Find the heap which owns this HeapObject. Should never be called for
   // objects in RO space.
   static inline Heap* FromWritableHeapObject(const HeapObject* obj);
+  // This takes a HeapObjectPtr* (as opposed to a plain HeapObjectPtr)
+  // to keep the WRITE_BARRIER macro syntax-compatible to the HeapObject*
+  // version above.
+  // TODO(3770): This should probably take a HeapObjectPtr eventually.
+  static inline Heap* FromWritableHeapObject(const HeapObjectPtr* obj);
 
   // ===========================================================================
   // Object statistics tracking. ===============================================
@@ -1043,9 +1003,8 @@ class Heap {
   // Returns the capacity of the old generation.
   size_t OldGenerationCapacity();
 
-  // Returns the amount of memory currently committed for the heap and memory
-  // held alive by the unmapper.
-  size_t CommittedMemoryOfHeapAndUnmapper();
+  // Returns the amount of memory currently held alive by the unmapper.
+  size_t CommittedMemoryOfUnmapper();
 
   // Returns the amount of memory currently committed for the heap.
   size_t CommittedMemory();
@@ -1316,7 +1275,7 @@ class Heap {
   class SkipStoreBufferScope;
 
   typedef String* (*ExternalStringTableUpdaterCallback)(Heap* heap,
-                                                        Object** pointer);
+                                                        ObjectSlot pointer);
 
   // External strings table is a place where all external strings are
   // registered.  We need to keep track of such strings to properly
@@ -1431,8 +1390,7 @@ class Heap {
     return 0;
   }
 
-#define ROOT_ACCESSOR(type, name, CamelName) \
-  inline void set_##name(type* value);
+#define ROOT_ACCESSOR(type, name, CamelName) inline void set_##name(type value);
   ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
@@ -1564,8 +1522,8 @@ class Heap {
   // - GCFinalzeMC: finalization of incremental full GC
   // - GCFinalizeMCReduceMemory: finalization of incremental full GC with
   // memory reduction
-  HistogramTimer* GCTypeTimer(GarbageCollector collector);
-  HistogramTimer* GCTypePriorityTimer(GarbageCollector collector);
+  TimedHistogram* GCTypeTimer(GarbageCollector collector);
+  TimedHistogram* GCTypePriorityTimer(GarbageCollector collector);
 
   // ===========================================================================
   // Pretenuring. ==============================================================
@@ -1781,44 +1739,12 @@ class Heap {
   bool IsRetainingPathTarget(HeapObject* object, RetainingPathOption* option);
   void PrintRetainingPath(HeapObject* object, RetainingPathOption option);
 
-  // The amount of external memory registered through the API.
-  int64_t external_memory_ = 0;
-
-  // The limit when to trigger memory pressure from the API.
-  int64_t external_memory_limit_ = kExternalAllocationSoftLimit;
-
-  // Caches the amount of external memory registered at the last MC.
-  int64_t external_memory_at_last_mark_compact_ = 0;
-
   // The amount of memory that has been freed concurrently.
   std::atomic<intptr_t> external_memory_concurrently_freed_{0};
 
   // This can be calculated directly from a pointer to the heap; however, it is
   // more expedient to get at the isolate directly from within Heap methods.
   Isolate* isolate_ = nullptr;
-
-  RootsTable roots_;
-
-  // This table is accessed from builtin code compiled into the snapshot, and
-  // thus its offset from roots_ must remain static. This is verified in
-  // Isolate::Init() using runtime checks.
-  static constexpr int kRootsExternalReferenceTableOffset =
-      static_cast<int>(RootIndex::kRootListLength) * kPointerSize;
-  ExternalReferenceTable external_reference_table_;
-
-  // As external references above, builtins are accessed through an offset from
-  // the roots register. Its offset from roots_ must remain static. This is
-  // verified in Isolate::Init() using runtime checks.
-  static constexpr int kRootsBuiltinsOffset =
-      kRootsExternalReferenceTableOffset +
-      ExternalReferenceTable::SizeInBytes();
-  Object* builtins_[Builtins::builtin_count];
-
-  // kRootRegister may be used to address any location that starts at the
-  // Isolate and ends at this point. Fields past this point are not guaranteed
-  // to live at a static offset from kRootRegister.
-  static constexpr int kRootRegisterAddressableEndOffset =
-      kRootsBuiltinsOffset + Builtins::builtin_count * kPointerSize;
 
   size_t code_range_size_ = 0;
   size_t max_semi_space_size_ = 8 * (kPointerSize / 4) * MB;
@@ -2094,6 +2020,7 @@ class Heap {
   friend class ObjectStatsCollector;
   friend class Page;
   friend class PagedSpace;
+  friend class ReadOnlyRoots;
   friend class Scavenger;
   friend class ScavengerCollector;
   friend class Space;
@@ -2197,7 +2124,7 @@ class CodePageMemoryModificationScope {
 
   // Disallow any GCs inside this scope, as a relocation of the underlying
   // object would change the {MemoryChunk} that this scope targets.
-  DisallowHeapAllocation no_heap_allocation_;
+  DISALLOW_HEAP_ALLOCATION(no_heap_allocation_);
 };
 
 // Visitor class to verify interior pointers in spaces that do not contain
@@ -2208,15 +2135,16 @@ class CodePageMemoryModificationScope {
 class VerifyPointersVisitor : public ObjectVisitor, public RootVisitor {
  public:
   explicit VerifyPointersVisitor(Heap* heap) : heap_(heap) {}
-  void VisitPointers(HeapObject* host, Object** start, Object** end) override;
-  void VisitPointers(HeapObject* host, MaybeObject** start,
-                     MaybeObject** end) override;
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override;
+  void VisitPointers(HeapObject* host, ObjectSlot start,
+                     ObjectSlot end) override;
+  void VisitPointers(HeapObject* host, MaybeObjectSlot start,
+                     MaybeObjectSlot end) override;
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override;
 
  protected:
-  virtual void VerifyPointers(HeapObject* host, MaybeObject** start,
-                              MaybeObject** end);
+  virtual void VerifyPointers(HeapObject* host, MaybeObjectSlot start,
+                              MaybeObjectSlot end);
 
   Heap* heap_;
 };
@@ -2225,8 +2153,8 @@ class VerifyPointersVisitor : public ObjectVisitor, public RootVisitor {
 // Verify that all objects are Smis.
 class VerifySmisVisitor : public RootVisitor {
  public:
-  void VisitRootPointers(Root root, const char* description, Object** start,
-                         Object** end) override;
+  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
+                         ObjectSlot end) override;
 };
 
 // Space iterator for iterating over all the paged spaces of the heap: Map
@@ -2288,7 +2216,7 @@ class HeapIterator {
  private:
   HeapObject* NextObject();
 
-  DisallowHeapAllocation no_heap_allocation_;
+  DISALLOW_HEAP_ALLOCATION(no_heap_allocation_);
 
   Heap* heap_;
   HeapObjectsFiltering filtering_;

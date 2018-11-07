@@ -13,8 +13,9 @@
 #include "src/base/logging.h"
 #include "src/char-predicates.h"
 #include "src/globals.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/parsing/token.h"
+#include "src/pointer-with-payload.h"
 #include "src/unicode-decoder.h"
 #include "src/unicode.h"
 
@@ -29,6 +30,7 @@ class ExternalTwoByteString;
 class ParserRecorder;
 class RuntimeCallStats;
 class UnicodeCache;
+class Zone;
 
 // ---------------------------------------------------------------------
 // Buffered stream of UTF-16 code units, using an internal UTF-16 buffer.
@@ -39,6 +41,13 @@ class Utf16CharacterStream {
   static const uc32 kEndOfInput = -1;
 
   virtual ~Utf16CharacterStream() = default;
+
+  V8_INLINE void set_parser_error() {
+    buffer_cursor_ = buffer_end_;
+    has_parser_error_ = true;
+  }
+  V8_INLINE void reset_parser_error_flag() { has_parser_error_ = false; }
+  V8_INLINE bool has_parser_error() const { return has_parser_error_; }
 
   inline uc32 Peek() {
     if (V8_LIKELY(buffer_cursor_ < buffer_end_)) {
@@ -109,6 +118,11 @@ class Utf16CharacterStream {
     }
   }
 
+  // Returns true if the stream could access the V8 heap after construction.
+  bool can_be_cloned_for_parallel_access() const {
+    return can_be_cloned() && !can_access_heap();
+  }
+
   // Returns true if the stream can be cloned with Clone.
   // TODO(rmcilroy): Remove this once ChunkedStreams can be cloned.
   virtual bool can_be_cloned() const = 0;
@@ -138,7 +152,7 @@ class Utf16CharacterStream {
   bool ReadBlockChecked() {
     size_t position = pos();
     USE(position);
-    bool success = ReadBlock();
+    bool success = !has_parser_error() && ReadBlock();
 
     // Post-conditions: 1, We should always be at the right position.
     //                  2, Cursor should be inside the buffer.
@@ -186,6 +200,7 @@ class Utf16CharacterStream {
   const uint16_t* buffer_end_;
   size_t buffer_pos_;
   RuntimeCallStats* runtime_call_stats_;
+  bool has_parser_error_ = false;
 };
 
 // ----------------------------------------------------------------------------
@@ -197,7 +212,9 @@ class Scanner {
   class BookmarkScope {
    public:
     explicit BookmarkScope(Scanner* scanner)
-        : scanner_(scanner), bookmark_(kNoBookmark) {
+        : scanner_(scanner),
+          bookmark_(kNoBookmark),
+          had_parser_error_(scanner->has_parser_error()) {
       DCHECK_NOT_NULL(scanner_);
     }
     ~BookmarkScope() = default;
@@ -214,18 +231,37 @@ class Scanner {
 
     Scanner* scanner_;
     size_t bookmark_;
+    bool had_parser_error_;
 
     DISALLOW_COPY_AND_ASSIGN(BookmarkScope);
   };
+
+  // Sets the Scanner into an error state to stop further scanning and terminate
+  // the parsing by only returning ILLEGAL tokens after that.
+  V8_INLINE void set_parser_error() {
+    if (!has_parser_error()) {
+      c0_ = kEndOfInput;
+      source_->set_parser_error();
+      for (TokenDesc& desc : token_storage_) {
+        desc.token = Token::ILLEGAL;
+        desc.contextual_token = Token::UNINITIALIZED;
+      }
+    }
+  }
+  V8_INLINE void reset_parser_error_flag() {
+    source_->reset_parser_error_flag();
+  }
+  V8_INLINE bool has_parser_error() const {
+    return source_->has_parser_error();
+  }
 
   // Representation of an interval of source positions.
   struct Location {
     Location(int b, int e) : beg_pos(b), end_pos(e) { }
     Location() : beg_pos(0), end_pos(0) { }
 
-    bool IsValid() const {
-      return beg_pos >= 0 && end_pos >= beg_pos;
-    }
+    int length() const { return end_pos - beg_pos; }
+    bool IsValid() const { return beg_pos >= 0 && end_pos >= beg_pos; }
 
     static Location invalid() { return Location(-1, -1); }
 
@@ -260,13 +296,13 @@ class Scanner {
 
   // This error is specifically an invalid hex or unicode escape sequence.
   bool has_error() const { return scanner_error_ != MessageTemplate::kNone; }
-  MessageTemplate::Template error() const { return scanner_error_; }
+  MessageTemplate error() const { return scanner_error_; }
   const Location& error_location() const { return scanner_error_location_; }
 
   bool has_invalid_template_escape() const {
     return current().invalid_template_escape_message != MessageTemplate::kNone;
   }
-  MessageTemplate::Template invalid_template_escape_message() const {
+  MessageTemplate invalid_template_escape_message() const {
     DCHECK(has_invalid_template_escape());
     return current().invalid_template_escape_message;
   }
@@ -320,12 +356,6 @@ class Scanner {
                 Token::String(token), Token::StringLength(token))));
   }
 
-  bool IsUseStrict() const {
-    return current().token == Token::STRING &&
-           current().literal_chars.Equals(
-               Vector<const char>("use strict", strlen("use strict")));
-  }
-
   bool IsGet() { return CurrentMatchesContextual(Token::GET); }
 
   bool IsSet() { return CurrentMatchesContextual(Token::SET); }
@@ -333,6 +363,20 @@ class Scanner {
   bool IsLet() const {
     return CurrentMatches(Token::LET) ||
            CurrentMatchesContextualEscaped(Token::LET);
+  }
+
+  template <size_t N>
+  bool NextLiteralEquals(const char (&s)[N]) {
+    DCHECK_EQ(Token::STRING, peek());
+    // The length of the token is used to make sure the literal equals without
+    // taking escape sequences (e.g., "use \x73trict") or line continuations
+    // (e.g., "use \(newline) strict") into account.
+    if (!is_next_literal_one_byte()) return false;
+    if (peek_location().length() != N + 1) return false;
+
+    Vector<const uint8_t> next = next_literal_one_byte_string();
+    const char* chars = reinterpret_cast<const char*>(next.start());
+    return next.length() == N - 1 && strncmp(s, chars, N - 1) == 0;
   }
 
   UnicodeCache* unicode_cache() const { return unicode_cache_; }
@@ -343,7 +387,7 @@ class Scanner {
     octal_pos_ = Location::invalid();
     octal_message_ = MessageTemplate::kNone;
   }
-  MessageTemplate::Template octal_message() const { return octal_message_; }
+  MessageTemplate octal_message() const { return octal_message_; }
 
   // Returns the value of the last smi that was scanned.
   uint32_t smi_value() const { return current().smi_value_; }
@@ -501,8 +545,8 @@ class Scanner {
 
     Vector<byte> backing_store_;
     int position_;
-    bool is_one_byte_;
-    bool is_used_;
+    bool is_one_byte_ : 1;
+    bool is_used_ : 1;
 
     DISALLOW_COPY_AND_ASSIGN(LiteralBuffer);
   };
@@ -512,17 +556,18 @@ class Scanner {
   class LiteralScope {
    public:
     explicit LiteralScope(Scanner* scanner)
-        : buffer_(&scanner->next().literal_chars), complete_(false) {
-      buffer_->Start();
+        : buffer_and_complete_(&scanner->next().literal_chars, false) {
+      buffer()->Start();
     }
     ~LiteralScope() {
-      if (!complete_) buffer_->Drop();
+      if (!buffer_and_complete_.GetPayload()) buffer()->Drop();
     }
-    void Complete() { complete_ = true; }
+    void Complete() { buffer_and_complete_.SetPayload(true); }
 
    private:
-    LiteralBuffer* buffer_;
-    bool complete_;
+    LiteralBuffer* buffer() const { return buffer_and_complete_.GetPointer(); }
+
+    PointerWithPayload<LiteralBuffer, bool, 1> buffer_and_complete_;
   };
 
   // The current and look-ahead token.
@@ -531,10 +576,9 @@ class Scanner {
     LiteralBuffer literal_chars;
     LiteralBuffer raw_literal_chars;
     Token::Value token = Token::UNINITIALIZED;
-    MessageTemplate::Template invalid_template_escape_message =
-        MessageTemplate::kNone;
-    Location invalid_template_escape_location;
     Token::Value contextual_token = Token::UNINITIALIZED;
+    MessageTemplate invalid_template_escape_message = MessageTemplate::kNone;
+    Location invalid_template_escape_location;
     uint32_t smi_value_ = 0;
     bool after_line_terminator = false;
   };
@@ -569,14 +613,13 @@ class Scanner {
     scanner_error_ = MessageTemplate::kNone;
   }
 
-  void ReportScannerError(const Location& location,
-                          MessageTemplate::Template error) {
+  void ReportScannerError(const Location& location, MessageTemplate error) {
     if (has_error()) return;
     scanner_error_ = error;
     scanner_error_location_ = location;
   }
 
-  void ReportScannerError(int pos, MessageTemplate::Template error) {
+  void ReportScannerError(int pos, MessageTemplate error) {
     if (has_error()) return;
     scanner_error_ = error;
     scanner_error_location_ = Location(pos, pos + 1);
@@ -816,9 +859,9 @@ class Scanner {
 
   // Last-seen positions of potentially problematic tokens.
   Location octal_pos_;
-  MessageTemplate::Template octal_message_;
+  MessageTemplate octal_message_;
 
-  MessageTemplate::Template scanner_error_;
+  MessageTemplate scanner_error_;
   Location scanner_error_location_;
 };
 

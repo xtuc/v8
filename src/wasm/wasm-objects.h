@@ -20,17 +20,16 @@
 namespace v8 {
 namespace internal {
 namespace wasm {
+struct CompilationEnv;
 class InterpretedFrame;
 struct InterpretedFrameDeleter;
 class NativeModule;
-struct ModuleEnv;
-class WasmCode;
-struct WasmModule;
 class SignatureMap;
-class WireBytesRef;
-class WasmInterpreter;
-using FunctionSig = Signature<ValueType>;
+class WasmCode;
 struct WasmFeatures;
+class WasmInterpreter;
+struct WasmModule;
+class WireBytesRef;
 }  // namespace wasm
 
 class BreakPoint;
@@ -38,6 +37,7 @@ class JSArrayBuffer;
 class SeqOneByteString;
 class WasmDebugInfo;
 class WasmInstanceObject;
+class WasmModuleObject;
 
 template <class CppType>
 class Managed;
@@ -137,7 +137,7 @@ class WasmModuleObject : public JSObject {
   // Creates a new {WasmModuleObject} with a new {NativeModule} underneath.
   static Handle<WasmModuleObject> New(
       Isolate* isolate, const wasm::WasmFeatures& enabled,
-      std::shared_ptr<const wasm::WasmModule> module, wasm::ModuleEnv& env,
+      std::shared_ptr<const wasm::WasmModule> module,
       OwnedVector<const uint8_t> wire_bytes, Handle<Script> script,
       Handle<ByteArray> asm_js_offset_table);
 
@@ -395,7 +395,7 @@ class WasmInstanceObject : public JSObject {
   DECL_PRIMITIVE_ACCESSORS(memory_start, byte*)
   DECL_PRIMITIVE_ACCESSORS(memory_size, size_t)
   DECL_PRIMITIVE_ACCESSORS(memory_mask, size_t)
-  DECL_PRIMITIVE_ACCESSORS(roots_array_address, Address)
+  DECL_PRIMITIVE_ACCESSORS(isolate_root, Address)
   DECL_PRIMITIVE_ACCESSORS(stack_limit_address, Address)
   DECL_PRIMITIVE_ACCESSORS(real_stack_limit_address, Address)
   DECL_PRIMITIVE_ACCESSORS(imported_function_targets, Address*)
@@ -431,7 +431,7 @@ class WasmInstanceObject : public JSObject {
   V(kMemoryStartOffset, kPointerSize)                    /* untagged */ \
   V(kMemorySizeOffset, kSizetSize)                       /* untagged */ \
   V(kMemoryMaskOffset, kSizetSize)                       /* untagged */ \
-  V(kRootsArrayAddressOffset, kPointerSize)              /* untagged */ \
+  V(kIsolateRootOffset, kPointerSize)                    /* untagged */ \
   V(kStackLimitAddressOffset, kPointerSize)              /* untagged */ \
   V(kRealStackLimitAddressOffset, kPointerSize)          /* untagged */ \
   V(kImportedFunctionTargetsOffset, kPointerSize)        /* untagged */ \

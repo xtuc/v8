@@ -78,7 +78,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   ExternalReference c_entry_fp =
       ExternalReference::Create(IsolateAddressId::kCEntryFPAddress, isolate());
   {
-    Operand c_entry_fp_operand = masm->ExternalOperand(c_entry_fp);
+    Operand c_entry_fp_operand = masm->ExternalReferenceAsOperand(c_entry_fp);
     __ Push(c_entry_fp_operand);
   }
 
@@ -134,7 +134,8 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   __ bind(&not_outermost_js_2);
 
   // Restore the top frame descriptor from the stack.
-  { Operand c_entry_fp_operand = masm->ExternalOperand(c_entry_fp);
+  {
+    Operand c_entry_fp_operand = masm->ExternalReferenceAsOperand(c_entry_fp);
     __ Pop(c_entry_fp_operand);
   }
 
@@ -531,7 +532,7 @@ void CallApiGetterStub::Generate(MacroAssembler* masm) {
   __ Push(kScratchRegister);  // return value default
   __ PushAddress(ExternalReference::isolate_address(isolate()));
   __ Push(holder);
-  __ Push(Smi::kZero);  // should_throw_on_error -> false
+  __ Push(Smi::zero());  // should_throw_on_error -> false
   __ Push(FieldOperand(callback, AccessorInfo::kNameOffset));
   __ PushReturnAddressFrom(scratch);
 

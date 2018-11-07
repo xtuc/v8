@@ -308,6 +308,11 @@ class Code : public HeapObject, public NeverReadOnlySpaceObject {
   // Migrate code from desc without flushing the instruction cache.
   void CopyFromNoFlush(Heap* heap, const CodeDesc& desc);
 
+  // Copy the RelocInfo portion of |desc| to |dest|. The ByteArray must be
+  // exactly the same size as the RelocInfo in |desc|.
+  static inline void CopyRelocInfoToByteArray(ByteArray* dest,
+                                              const CodeDesc& desc);
+
   // Flushes the instruction cache for the executable instructions of this code
   // object.
   void FlushICache() const;
@@ -364,7 +369,7 @@ class Code : public HeapObject, public NeverReadOnlySpaceObject {
     Code* current_code_;
     Isolate* isolate_;
 
-    DisallowHeapAllocation no_gc;
+    DISALLOW_HEAP_ALLOCATION(no_gc);
     DISALLOW_COPY_AND_ASSIGN(OptimizedCodeIterator)
   };
 
@@ -615,7 +620,7 @@ class DependentCode : public WeakFixedArray {
 
   // The following low-level accessors are exposed only for tests.
   inline DependencyGroup group();
-  inline MaybeObject* object_at(int i);
+  inline MaybeObject object_at(int i);
   inline int count();
   inline DependentCode* next_link();
 
@@ -653,7 +658,7 @@ class DependentCode : public WeakFixedArray {
 
   inline void set_next_link(DependentCode* next);
   inline void set_count(int value);
-  inline void set_object_at(int i, MaybeObject* object);
+  inline void set_object_at(int i, MaybeObject object);
   inline void clear_at(int i);
   inline void copy(int from, int to);
 
@@ -821,24 +826,24 @@ class DeoptimizationData : public FixedArray {
 
 // Simple element accessors.
 #define DECL_ELEMENT_ACCESSORS(name, type) \
-  inline type* name();                     \
-  inline void Set##name(type* value);
+  inline type name();                      \
+  inline void Set##name(type value);
 
-  DECL_ELEMENT_ACCESSORS(TranslationByteArray, ByteArray)
+  DECL_ELEMENT_ACCESSORS(TranslationByteArray, ByteArray*)
   DECL_ELEMENT_ACCESSORS(InlinedFunctionCount, Smi)
-  DECL_ELEMENT_ACCESSORS(LiteralArray, FixedArray)
+  DECL_ELEMENT_ACCESSORS(LiteralArray, FixedArray*)
   DECL_ELEMENT_ACCESSORS(OsrBytecodeOffset, Smi)
   DECL_ELEMENT_ACCESSORS(OsrPcOffset, Smi)
   DECL_ELEMENT_ACCESSORS(OptimizationId, Smi)
-  DECL_ELEMENT_ACCESSORS(SharedFunctionInfo, Object)
-  DECL_ELEMENT_ACCESSORS(InliningPositions, PodArray<InliningPosition>)
+  DECL_ELEMENT_ACCESSORS(SharedFunctionInfo, Object*)
+  DECL_ELEMENT_ACCESSORS(InliningPositions, PodArray<InliningPosition>*)
 
 #undef DECL_ELEMENT_ACCESSORS
 
 // Accessors for elements of the ith deoptimization entry.
 #define DECL_ENTRY_ACCESSORS(name, type) \
-  inline type* name(int i);              \
-  inline void Set##name(int i, type* value);
+  inline type name(int i);               \
+  inline void Set##name(int i, type value);
 
   DECL_ENTRY_ACCESSORS(BytecodeOffsetRaw, Smi)
   DECL_ENTRY_ACCESSORS(TranslationIndex, Smi)

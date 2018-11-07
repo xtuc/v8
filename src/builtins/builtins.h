@@ -12,6 +12,7 @@
 namespace v8 {
 namespace internal {
 
+class ByteArray;
 class Callable;
 template <typename T>
 class Handle;
@@ -46,7 +47,7 @@ class Builtins {
   enum Name : int32_t {
 #define DEF_ENUM(Name, ...) k##Name,
     BUILTIN_LIST(DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM,
-                 DEF_ENUM, DEF_ENUM, DEF_ENUM)
+                 DEF_ENUM, DEF_ENUM)
 #undef DEF_ENUM
         builtin_count,
 
@@ -81,7 +82,7 @@ class Builtins {
   Handle<Code> NewFunctionContext(ScopeType scope_type);
   Handle<Code> JSConstructStubGeneric();
 
-  // Used by BuiltinDeserializer and CreateOffHeapTrampolines in isolate.cc.
+  // Used by CreateOffHeapTrampolines in isolate.cc.
   void set_builtin(int index, HeapObject* builtin);
 
   Code* builtin(int index);
@@ -114,11 +115,6 @@ class Builtins {
   // True, iff the given code object is a builtin with off-heap embedded code.
   static bool IsIsolateIndependentBuiltin(const Code* code);
 
-  // Returns true iff the given builtin can be lazy-loaded from the snapshot.
-  // This is true in general for most builtins with the exception of a few
-  // special cases such as CompileLazy and DeserializeLazy.
-  static bool IsLazy(int index);
-
   static constexpr int kFirstWideBytecodeHandler =
       kFirstBytecodeHandler + kNumberOfBytecodeHandlers;
   static constexpr int kFirstExtraWideBytecodeHandler =
@@ -126,27 +122,6 @@ class Builtins {
   STATIC_ASSERT(kFirstExtraWideBytecodeHandler +
                     kNumberOfWideBytecodeHandlers ==
                 builtin_count);
-
-  // Returns the index of the appropriate lazy deserializer in the builtins
-  // table.
-  static constexpr int LazyDeserializerForBuiltin(const int index) {
-    return index < kFirstWideBytecodeHandler
-               ? (index < kFirstBytecodeHandler
-                      ? Builtins::kDeserializeLazy
-                      : Builtins::kDeserializeLazyHandler)
-               : (index < kFirstExtraWideBytecodeHandler
-                      ? Builtins::kDeserializeLazyWideHandler
-                      : Builtins::kDeserializeLazyExtraWideHandler);
-  }
-
-  static constexpr bool IsLazyDeserializer(int builtin_index) {
-    return builtin_index == kDeserializeLazy ||
-           builtin_index == kDeserializeLazyHandler ||
-           builtin_index == kDeserializeLazyWideHandler ||
-           builtin_index == kDeserializeLazyExtraWideHandler;
-  }
-
-  static bool IsLazyDeserializer(Code* code);
 
   // Helper methods used for testing isolate-independent builtins.
   // TODO(jgruber,v8:6666): Remove once all builtins have been migrated.
@@ -188,6 +163,10 @@ class Builtins {
   static Handle<Code> GenerateOffHeapTrampolineFor(Isolate* isolate,
                                                    Address off_heap_entry);
 
+  // Generate the RelocInfo ByteArray that would be generated for an offheap
+  // trampoline.
+  static Handle<ByteArray> GenerateOffHeapTrampolineRelocInfo(Isolate* isolate);
+
  private:
   static void Generate_CallFunction(MacroAssembler* masm,
                                     ConvertReceiverMode mode);
@@ -216,8 +195,7 @@ class Builtins {
   static void Generate_##Name(compiler::CodeAssemblerState* state);
 
   BUILTIN_LIST(IGNORE_BUILTIN, IGNORE_BUILTIN, DECLARE_TF, DECLARE_TF,
-               DECLARE_TF, DECLARE_TF, IGNORE_BUILTIN, IGNORE_BUILTIN,
-               DECLARE_ASM)
+               DECLARE_TF, DECLARE_TF, IGNORE_BUILTIN, DECLARE_ASM)
 
 #undef DECLARE_ASM
 #undef DECLARE_TF
@@ -229,6 +207,9 @@ class Builtins {
 
   DISALLOW_COPY_AND_ASSIGN(Builtins);
 };
+
+Builtins::Name ExampleBuiltinForTorqueFunctionPointerType(
+    size_t function_pointer_type_id);
 
 }  // namespace internal
 }  // namespace v8

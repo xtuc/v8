@@ -7,7 +7,7 @@
 #include "src/arguments-inl.h"
 #include "src/conversions-inl.h"
 #include "src/isolate-inl.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/js-array-inl.h"
 #include "src/regexp/jsregexp-inl.h"
 #include "src/regexp/jsregexp.h"
@@ -1571,8 +1571,6 @@ Handle<JSArray> NewJSArrayWithElements(Isolate* isolate,
 RUNTIME_FUNCTION(Runtime_RegExpSplit) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
-
-  DCHECK(args[1]->IsString());
 
   CONVERT_ARG_HANDLE_CHECKED(JSReceiver, recv, 0);
   CONVERT_ARG_HANDLE_CHECKED(String, string, 1);

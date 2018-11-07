@@ -11,6 +11,7 @@
 #include "src/objects-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/objects/smi.h"
 
 namespace v8 {
 namespace internal {
@@ -357,13 +358,13 @@ class ObjectDescriptor {
   void AddNamedProperty(Isolate* isolate, Handle<Name> name,
                         ClassBoilerplate::ValueKind value_kind,
                         int value_index) {
-    Smi* value = Smi::FromInt(value_index);
+    Smi value = Smi::FromInt(value_index);
     if (HasDictionaryProperties()) {
       UpdateNextEnumerationIndex(value_index);
       AddToDictionaryTemplate(isolate, properties_dictionary_template_, name,
                               value_index, value_kind, value);
     } else {
-      *temp_handle_.location() = value;
+      *temp_handle_.location() = value->ptr();
       AddToDescriptorArrayTemplate(isolate, descriptor_array_template_, name,
                                    value_kind, temp_handle_);
     }
@@ -372,7 +373,7 @@ class ObjectDescriptor {
   void AddIndexedProperty(Isolate* isolate, uint32_t element,
                           ClassBoilerplate::ValueKind value_kind,
                           int value_index) {
-    Smi* value = Smi::FromInt(value_index);
+    Smi value = Smi::FromInt(value_index);
     AddToDictionaryTemplate(isolate, elements_dictionary_template_, element,
                             value_index, value_kind, value);
   }
@@ -460,9 +461,6 @@ Handle<ClassBoilerplate> ClassBoilerplate::BuildClassBoilerplate(
   // Initialize class object template.
   //
   static_desc.CreateTemplates(isolate, kMinimumClassPropertiesCount);
-  Handle<DescriptorArray> class_function_descriptors(
-      isolate->native_context()->class_function_map()->instance_descriptors(),
-      isolate);
   STATIC_ASSERT(JSFunction::kLengthDescriptorIndex == 0);
   {
     // Add length_accessor.
@@ -525,13 +523,11 @@ Handle<ClassBoilerplate> ClassBoilerplate::BuildClassBoilerplate(
       case ClassLiteral::Property::SETTER:
         value_kind = ClassBoilerplate::kSetter;
         break;
-      case ClassLiteral::Property::PUBLIC_FIELD:
+      case ClassLiteral::Property::FIELD:
+        DCHECK_IMPLIES(property->is_computed_name(), !property->is_private());
         if (property->is_computed_name()) {
           ++dynamic_argument_index;
         }
-        continue;
-      case ClassLiteral::Property::PRIVATE_FIELD:
-        DCHECK(!property->is_computed_name());
         continue;
     }
 

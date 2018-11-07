@@ -123,10 +123,11 @@ class SerializerDeserializer : public RootVisitor {
       const std::vector<CallHandlerInfo*>& call_handler_infos);
 
 #define UNUSED_SERIALIZER_BYTE_CODES(V) \
-  V(0x18)                               \
-  V(0x3d)                               \
+  V(0x0e)                               \
+  V(0x2e)                               \
   V(0x3e)                               \
   V(0x3f)                               \
+  V(0x4e)                               \
   V(0x58)                               \
   V(0x59)                               \
   V(0x5a)                               \
@@ -136,8 +137,8 @@ class SerializerDeserializer : public RootVisitor {
   V(0x5e)                               \
   V(0x5f)                               \
   V(0x67)                               \
+  V(0x6e)                               \
   V(0x76)                               \
-  V(0x78)                               \
   V(0x79)                               \
   V(0x7a)                               \
   V(0x7b)                               \
@@ -163,12 +164,12 @@ class SerializerDeserializer : public RootVisitor {
     // 0x07        External reference referenced by id.
     kExternalReference = 0x07,
 
-    // 0x0e        Builtin code referenced by index.
-    kBuiltin = 0x0e,
     // 0x16       Root array item.
     kRootArray = 0x16,
     // 0x17        Object provided in the attached list.
     kAttachedReference = 0x17,
+    // 0x18        Object in the read-only object cache.
+    kReadOnlyObjectCache = 0x18,
 
     // 0x0f        Misc, see below (incl. 0x2f, 0x4f, 0x6f).
     // 0x18..0x1f  Misc, see below (incl. 0x38..0x3f, 0x58..0x5f, 0x78..0x7f).
@@ -225,14 +226,14 @@ class SerializerDeserializer : public RootVisitor {
   // Used for embedder-provided serialization data for embedder fields.
   static const int kEmbedderFieldsData = 0x1f;
 
-  // Used to encode external referenced provided through the API.
-  static const int kApiReference = 0x38;
-
   static const int kVariableRawCode = 0x39;
   static const int kVariableRawData = 0x3a;
 
   static const int kInternalReference = 0x3b;
   static const int kInternalReferenceEncoded = 0x3c;
+
+  // Used to encode external references provided through the API.
+  static const int kApiReference = 0x3d;
 
   // In-place weak references
   static const int kWeakPrefix = 0x7e;

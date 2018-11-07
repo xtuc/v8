@@ -8,10 +8,14 @@
 #include "src/code-stubs.h"
 #include "src/isolate.h"
 #include "src/objects.h"
+#include "src/objects/slots.h"
 #include "src/snapshot/code-serializer.h"
 
 namespace v8 {
 namespace internal {
+
+ObjectDeserializer::ObjectDeserializer(const SerializedCodeData* data)
+    : Deserializer(data, true) {}
 
 MaybeHandle<SharedFunctionInfo>
 ObjectDeserializer::DeserializeSharedFunctionInfo(
@@ -43,7 +47,7 @@ MaybeHandle<HeapObject> ObjectDeserializer::Deserialize(Isolate* isolate) {
   {
     DisallowHeapAllocation no_gc;
     Object* root;
-    VisitRootPointer(Root::kPartialSnapshotCache, nullptr, &root);
+    VisitRootPointer(Root::kPartialSnapshotCache, nullptr, ObjectSlot(&root));
     DeserializeDeferredObjects();
     FlushICacheForNewCodeObjectsAndRecordEmbeddedObjects();
     result = handle(HeapObject::cast(root), isolate);

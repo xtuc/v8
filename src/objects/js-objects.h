@@ -28,7 +28,7 @@ class JSReceiver : public HeapObject, public NeverReadOnlySpaceObject {
   // exists. Otherwise, returns an empty_property_array when there's a
   // Smi (hash code) or an empty_fixed_array for a fast properties
   // map.
-  inline PropertyArray* property_array() const;
+  inline PropertyArray property_array() const;
 
   // Gets slow properties for non-global objects.
   inline NameDictionary* property_dictionary() const;
@@ -228,8 +228,8 @@ class JSReceiver : public HeapObject, public NeverReadOnlySpaceObject {
 
   // Retrieves a permanent object identity hash code. May create and store a
   // hash code if needed and none exists.
-  static Smi* CreateIdentityHash(Isolate* isolate, JSReceiver* key);
-  Smi* GetOrCreateIdentityHash(Isolate* isolate);
+  static Smi CreateIdentityHash(Isolate* isolate, JSReceiver* key);
+  Smi GetOrCreateIdentityHash(Isolate* isolate);
 
   // Stores the hash code. The hash passed in must be masked with
   // JSReceiver::kHashMask.
@@ -270,7 +270,7 @@ class JSReceiver : public HeapObject, public NeverReadOnlySpaceObject {
 // caching.
 class JSObject : public JSReceiver {
  public:
-  static bool IsUnmodifiedApiObject(Object** o);
+  static bool IsUnmodifiedApiObject(ObjectSlot o);
 
   static V8_WARN_UNUSED_RESULT MaybeHandle<JSObject> New(
       Handle<JSFunction> constructor, Handle<JSReceiver> new_target,
@@ -495,7 +495,8 @@ class JSObject : public JSReceiver {
 
   // Makes sure that this object can contain the specified elements.
   static inline void EnsureCanContainElements(Handle<JSObject> object,
-                                              Object** elements, uint32_t count,
+                                              ObjectSlot elements,
+                                              uint32_t count,
                                               EnsureElementsMode mode);
   static inline void EnsureCanContainElements(Handle<JSObject> object,
                                               Handle<FixedArrayBase> elements,
@@ -550,8 +551,10 @@ class JSObject : public JSReceiver {
   inline int GetEmbedderFieldCount() const;
   inline int GetEmbedderFieldOffset(int index);
   inline Object* GetEmbedderField(int index);
+  inline Address GetEmbedderFieldRaw(int index);
   inline void SetEmbedderField(int index, Object* value);
-  inline void SetEmbedderField(int index, Smi* value);
+  inline void SetEmbedderField(int index, Smi value);
+  inline void SetEmbedderFieldRaw(int index, Address value);
 
   // Returns true when the object is potentially a wrapper that gets special
   // garbage collection treatment.
@@ -1220,7 +1223,7 @@ class JSDate : public JSObject {
 
   // Returns the date field with the specified index.
   // See FieldIndex for the list of date fields.
-  static Object* GetField(Object* date, Smi* index);
+  static Object* GetField(Object* date, Smi index);
 
   static Handle<Object> SetValue(Handle<JSDate> date, double v);
 
@@ -1291,8 +1294,8 @@ class JSDate : public JSObject {
 class JSMessageObject : public JSObject {
  public:
   // [type]: the type of error message.
-  inline int type() const;
-  inline void set_type(int value);
+  inline MessageTemplate type() const;
+  inline void set_type(MessageTemplate value);
 
   // [arguments]: the arguments for formatting the error message.
   DECL_ACCESSORS(argument, Object)

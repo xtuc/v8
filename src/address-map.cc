@@ -14,9 +14,9 @@ RootIndexMap::RootIndexMap(Isolate* isolate) {
   map_ = isolate->root_index_map();
   if (map_ != nullptr) return;
   map_ = new HeapObjectToIndexHashMap();
-  for (RootIndex root_index = RootIndex::kFirstStrongRoot;
-       root_index <= RootIndex::kLastStrongRoot; ++root_index) {
-    Object* root = isolate->heap()->root(root_index);
+  for (RootIndex root_index = RootIndex::kFirstStrongOrReadOnlyRoot;
+       root_index <= RootIndex::kLastStrongOrReadOnlyRoot; ++root_index) {
+    Object* root = isolate->root(root_index);
     if (!root->IsHeapObject()) continue;
     // Omit root entries that can be written after initialization. They must
     // not be referenced through the root list in the snapshot.

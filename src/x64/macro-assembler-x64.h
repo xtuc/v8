@@ -7,6 +7,7 @@
 
 #include "src/bailout-reason.h"
 #include "src/base/flags.h"
+#include "src/contexts.h"
 #include "src/globals.h"
 #include "src/turbo-assembler.h"
 #include "src/x64/assembler-x64.h"
@@ -229,7 +230,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Push(Register src);
   void Push(Operand src);
   void Push(Immediate value);
-  void Push(Smi* smi);
+  void Push(Smi smi);
   void Push(Handle<HeapObject> source);
 
   // Before calling a C-function from generated code, align arguments on stack.
@@ -325,9 +326,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
     j(less, dest);
   }
 
-  void Move(Register dst, Smi* source);
+  void Move(Register dst, Smi source);
 
-  void Move(Operand dst, Smi* source) {
+  void Move(Operand dst, Smi source) {
     Register constant = GetSmiConstant(source);
     movp(dst, constant);
   }
@@ -377,8 +378,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // isn't changed.
   // If the operand is used more than once, use a scratch register
   // that is guaranteed not to be clobbered.
-  Operand ExternalOperand(ExternalReference reference,
-                          Register scratch = kScratchRegister);
+  Operand ExternalReferenceAsOperand(ExternalReference reference,
+                                     Register scratch = kScratchRegister);
 
   void Call(Register reg) { call(reg); }
   void Call(Operand op);
@@ -465,10 +466,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void CallRuntimeWithCEntry(Runtime::FunctionId fid, Register centry);
 
   void InitializeRootRegister() {
-    ExternalReference roots_array_start =
-        ExternalReference::roots_array_start(isolate());
-    Move(kRootRegister, roots_array_start);
-    addp(kRootRegister, Immediate(kRootRegisterBias));
+    ExternalReference isolate_root = ExternalReference::isolate_root(isolate());
+    Move(kRootRegister, isolate_root);
   }
 
   void SaveRegisters(RegList registers);
@@ -477,6 +476,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void CallRecordWriteStub(Register object, Register address,
                            RememberedSetAction remembered_set_action,
                            SaveFPRegsMode fp_mode);
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Address wasm_target);
 
   void MoveNumber(Register dst, double value);
   void MoveNonSmi(Register dst, double value);
@@ -515,11 +517,14 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   int smi_count = 0;
   int heap_object_count = 0;
 
-  int64_t RootRegisterDelta(ExternalReference other);
-
   // Returns a register holding the smi value. The register MUST NOT be
   // modified. It may be the "smi 1 constant" register.
-  Register GetSmiConstant(Smi* value);
+  Register GetSmiConstant(Smi value);
+
+  void CallRecordWriteStub(Register object, Register address,
+                           RememberedSetAction remembered_set_action,
+                           SaveFPRegsMode fp_mode, Handle<Code> code_target,
+                           Address wasm_target);
 };
 
 // MacroAssembler implements a collection of frequently used macros.
@@ -540,7 +545,7 @@ class MacroAssembler : public TurboAssembler {
   // Special case code for load and store to take advantage of
   // load_rax/store_rax if possible/necessary.
   // For other operations, just use:
-  //   Operand operand = ExternalOperand(extref);
+  //   Operand operand = ExternalReferenceAsOperand(extref);
   //   operation(operand, ..);
   void Load(Register destination, ExternalReference source);
   void Store(ExternalReference destination, Register source);
@@ -664,10 +669,10 @@ class MacroAssembler : public TurboAssembler {
   // Simple comparison of smis.  Both sides must be known smis to use these,
   // otherwise use Cmp.
   void SmiCompare(Register smi1, Register smi2);
-  void SmiCompare(Register dst, Smi* src);
+  void SmiCompare(Register dst, Smi src);
   void SmiCompare(Register dst, Operand src);
   void SmiCompare(Operand dst, Register src);
-  void SmiCompare(Operand dst, Smi* src);
+  void SmiCompare(Operand dst, Smi src);
 
   // Functions performing a check on a known or potential smi. Returns
   // a condition that is satisfied if the check is successful.
@@ -691,7 +696,7 @@ class MacroAssembler : public TurboAssembler {
 
   // Add an integer constant to a tagged smi, giving a tagged smi as result.
   // No overflow testing on the result is done.
-  void SmiAddConstant(Operand dst, Smi* constant);
+  void SmiAddConstant(Operand dst, Smi constant);
 
   // Specialized operations
 
@@ -714,8 +719,8 @@ class MacroAssembler : public TurboAssembler {
 
   void Cmp(Register dst, Handle<Object> source);
   void Cmp(Operand dst, Handle<Object> source);
-  void Cmp(Register dst, Smi* src);
-  void Cmp(Operand dst, Smi* src);
+  void Cmp(Register dst, Smi src);
+  void Cmp(Operand dst, Smi src);
 
   // Emit code to discard a non-negative number of pointer-sized elements
   // from the stack, clobbering only the rsp register.
@@ -868,9 +873,6 @@ class MacroAssembler : public TurboAssembler {
   static int SafepointRegisterStackIndex(Register reg) {
     return SafepointRegisterStackIndex(reg.code());
   }
-
-  void EnterBuiltinFrame(Register context, Register target, Register argc);
-  void LeaveBuiltinFrame(Register context, Register target, Register argc);
 
  private:
   // Order general registers are pushed by Pushad.

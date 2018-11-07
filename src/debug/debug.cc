@@ -28,11 +28,12 @@
 #include "src/interpreter/interpreter.h"
 #include "src/isolate-inl.h"
 #include "src/log.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/api-callbacks-inl.h"
 #include "src/objects/debug-objects-inl.h"
 #include "src/objects/js-generator-inl.h"
 #include "src/objects/js-promise-inl.h"
+#include "src/objects/slots.h"
 #include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
 #include "src/wasm/wasm-objects-inl.h"
@@ -49,7 +50,7 @@ class Debug::TemporaryObjectsTracker : public HeapObjectAllocationTracker {
 
   void MoveEvent(Address from, Address to, int) override {
     if (from == to) return;
-    base::LockGuard<base::Mutex> guard(&mutex_);
+    base::MutexGuard guard(&mutex_);
     auto it = objects_.find(from);
     if (it == objects_.end()) {
       // If temporary object was collected we can get MoveEvent which moves
@@ -380,11 +381,12 @@ char* Debug::RestoreDebug(char* storage) {
 int Debug::ArchiveSpacePerThread() { return sizeof(ThreadLocal); }
 
 void Debug::Iterate(RootVisitor* v) {
-  v->VisitRootPointer(Root::kDebug, nullptr, &thread_local_.return_value_);
   v->VisitRootPointer(Root::kDebug, nullptr,
-                      &thread_local_.suspended_generator_);
+                      ObjectSlot(&thread_local_.return_value_));
   v->VisitRootPointer(Root::kDebug, nullptr,
-                      &thread_local_.ignore_step_into_function_);
+                      ObjectSlot(&thread_local_.suspended_generator_));
+  v->VisitRootPointer(Root::kDebug, nullptr,
+                      ObjectSlot(&thread_local_.ignore_step_into_function_));
 }
 
 DebugInfoListNode::DebugInfoListNode(Isolate* isolate, DebugInfo* debug_info)
@@ -397,7 +399,7 @@ DebugInfoListNode::DebugInfoListNode(Isolate* isolate, DebugInfo* debug_info)
 
 DebugInfoListNode::~DebugInfoListNode() {
   if (debug_info_ == nullptr) return;
-  GlobalHandles::Destroy(reinterpret_cast<Object**>(debug_info_));
+  GlobalHandles::Destroy(debug_info_);
   debug_info_ = nullptr;
 }
 
@@ -1464,10 +1466,6 @@ bool Debug::EnsureBreakInfo(Handle<SharedFunctionInfo> shared) {
       !Compiler::Compile(shared, Compiler::CLEAR_EXCEPTION)) {
     return false;
   }
-  if (shared->GetCode() ==
-      isolate_->builtins()->builtin(Builtins::kDeserializeLazy)) {
-    Snapshot::EnsureBuiltinIsDeserialized(isolate_, shared);
-  }
   CreateBreakInfo(shared);
   return true;
 }
@@ -1820,6 +1818,7 @@ bool Debug::IsBlackboxed(Handle<SharedFunctionInfo> shared) {
 bool Debug::AllFramesOnStackAreBlackboxed() {
   HandleScope scope(isolate_);
   for (StackTraceFrameIterator it(isolate_); !it.done(); it.Advance()) {
+    if (!it.is_javascript()) continue;
     if (!IsFrameBlackboxed(it.javascript_frame())) return false;
   }
   return true;
@@ -1913,9 +1912,7 @@ void Debug::UpdateState() {
     Unload();
   }
   is_active_ = is_active;
-  if (is_active && isolate_->IsPromiseHookProtectorIntact()) {
-    isolate_->InvalidatePromiseHookProtector();
-  }
+  isolate_->PromiseHookStateUpdated();
 }
 
 void Debug::UpdateHookOnFunctionCall() {
@@ -2162,10 +2159,6 @@ bool Debug::PerformSideEffectCheck(Handle<JSFunction> function,
       // If function has bytecode array then prepare function for debug
       // execution to perform runtime side effect checks.
       DCHECK(shared->is_compiled());
-      if (shared->GetCode() ==
-          isolate_->builtins()->builtin(Builtins::kDeserializeLazy)) {
-        Snapshot::EnsureBuiltinIsDeserialized(isolate_, shared);
-      }
       PrepareFunctionForDebugExecution(shared);
       ApplySideEffectChecks(debug_info);
       return true;

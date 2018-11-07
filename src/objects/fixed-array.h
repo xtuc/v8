@@ -7,6 +7,8 @@
 
 #include "src/maybe-handles.h"
 #include "src/objects.h"
+#include "src/objects/slots.h"
+#include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -124,7 +126,7 @@ class FixedArray : public FixedArrayBase {
   inline bool is_the_hole(Isolate* isolate, int index);
 
   // Setter that doesn't need write barrier.
-  inline void set(int index, Smi* value);
+  inline void set(int index, Smi value);
   // Setter with explicit barrier mode.
   inline void set(int index, Object* value, WriteBarrierMode mode);
 
@@ -136,13 +138,16 @@ class FixedArray : public FixedArrayBase {
   inline void set_the_hole(int index);
   inline void set_the_hole(Isolate* isolate, int index);
 
-  inline Object** GetFirstElementAddress();
+  inline ObjectSlot GetFirstElementAddress();
   inline bool ContainsOnlySmisOrHoles();
   // Returns true iff the elements are Numbers and sorted ascending.
   bool ContainsSortedNumbers();
 
   // Gives access to raw memory which stores the array's data.
-  inline Object** data_start();
+  inline ObjectSlot data_start();
+
+  inline void MoveElements(Heap* heap, int dst_index, int src_index, int len,
+                           WriteBarrierMode mode);
 
   inline void FillWithHoles(int from, int to);
 
@@ -166,7 +171,7 @@ class FixedArray : public FixedArrayBase {
   static constexpr int OffsetOfElementAt(int index) { return SizeFor(index); }
 
   // Garbage collection support.
-  inline Object** RawFieldOfElementAt(int index);
+  inline ObjectSlot RawFieldOfElementAt(int index);
 
   DECL_CAST(FixedArray)
   // Maximally allowed length of a FixedArray.
@@ -234,8 +239,8 @@ class FixedDoubleArray : public FixedArrayBase {
     return kHeaderSize + length * kDoubleSize;
   }
 
-  // Gives access to raw memory which stores the array's data.
-  inline double* data_start();
+  inline void MoveElements(Heap* heap, int dst_index, int src_index, int len,
+                           WriteBarrierMode mode);
 
   inline void FillWithHoles(int from, int to);
 
@@ -260,18 +265,18 @@ class FixedDoubleArray : public FixedArrayBase {
 };
 
 // WeakFixedArray describes fixed-sized arrays with element type
-// MaybeObject*.
+// MaybeObject.
 class WeakFixedArray : public HeapObject {
  public:
   DECL_CAST(WeakFixedArray)
 
-  inline MaybeObject* Get(int index) const;
+  inline MaybeObject Get(int index) const;
 
   // Setter that uses write barrier.
-  inline void Set(int index, MaybeObject* value);
+  inline void Set(int index, MaybeObject value);
 
   // Setter with explicit barrier mode.
-  inline void Set(int index, MaybeObject* value, WriteBarrierMode mode);
+  inline void Set(int index, MaybeObject value, WriteBarrierMode mode);
 
   static constexpr int SizeFor(int length) {
     return kHeaderSize + length * kPointerSize;
@@ -284,11 +289,9 @@ class WeakFixedArray : public HeapObject {
   inline void synchronized_set_length(int value);
 
   // Gives access to raw memory which stores the array's data.
-  inline MaybeObject** data_start();
+  inline MaybeObjectSlot data_start();
 
-  inline MaybeObject** RawFieldOfElementAt(int index);
-
-  inline MaybeObject** GetFirstElementAddress();
+  inline MaybeObjectSlot RawFieldOfElementAt(int index);
 
   DECL_PRINTER(WeakFixedArray)
   DECL_VERIFIER(WeakFixedArray)
@@ -321,7 +324,7 @@ class WeakFixedArray : public HeapObject {
 // capacity() returns the allocated size. The number of elements is stored at
 // kLengthOffset and is updated with every insertion. The array grows
 // dynamically with O(1) amortized insertion.
-class WeakArrayList : public HeapObject {
+class WeakArrayList : public HeapObject, public NeverReadOnlySpaceObject {
  public:
   DECL_CAST(WeakArrayList)
   DECL_VERIFIER(WeakArrayList)
@@ -331,12 +334,12 @@ class WeakArrayList : public HeapObject {
                                         Handle<WeakArrayList> array,
                                         const MaybeObjectHandle& value);
 
-  inline MaybeObject* Get(int index) const;
+  inline MaybeObject Get(int index) const;
 
   // Set the element at index to obj. The underlying array must be large enough.
   // If you need to grow the WeakArrayList, use the static AddToEnd() method
   // instead.
-  inline void Set(int index, MaybeObject* value,
+  inline void Set(int index, MaybeObject value,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   static constexpr int SizeForCapacity(int capacity) {
@@ -344,7 +347,7 @@ class WeakArrayList : public HeapObject {
   }
 
   // Gives access to raw memory which stores the array's data.
-  inline MaybeObject** data_start();
+  inline MaybeObjectSlot data_start();
 
   bool IsFull();
 
@@ -423,7 +426,7 @@ class ArrayList : public FixedArray {
   // storage capacity, i.e., length().
   inline void SetLength(int length);
   inline Object* Get(int index) const;
-  inline Object** Slot(int index);
+  inline ObjectSlot Slot(int index);
 
   // Set the element at index to obj. The underlying array must be large enough.
   // If you need to grow the ArrayList, use the static Add() methods instead.

@@ -16,15 +16,13 @@ namespace v8 {
 namespace internal {
 namespace wasm {
 
-using FunctionSig = Signature<ValueType>;
-
 // Implements a cache for import wrappers.
 class WasmImportWrapperCache {
  public:
   WasmCode* GetOrCompile(Isolate* isolate, compiler::WasmImportCallKind kind,
                          FunctionSig* sig) {
     // TODO(titzer): remove the isolate parameter.
-    base::LockGuard<base::Mutex> lock(&mutex_);
+    base::MutexGuard lock(&mutex_);
     CacheKey key(static_cast<uint8_t>(kind), *sig);
     WasmCode*& cached = entry_map_[key];
     if (cached == nullptr) {

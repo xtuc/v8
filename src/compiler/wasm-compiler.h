@@ -50,20 +50,18 @@ class TurbofanWasmCompilationUnit {
   explicit TurbofanWasmCompilationUnit(wasm::WasmCompilationUnit* wasm_unit);
   ~TurbofanWasmCompilationUnit();
 
-  SourcePositionTable* BuildGraphForWasmFunction(wasm::WasmFeatures* detected,
-                                                 double* decode_ms,
-                                                 MachineGraph* mcgraph,
-                                                 NodeOriginTable* node_origins);
+  bool BuildGraphForWasmFunction(wasm::CompilationEnv* env,
+                                 const wasm::FunctionBody& func_body,
+                                 wasm::WasmFeatures* detected,
+                                 double* decode_ms, MachineGraph* mcgraph,
+                                 NodeOriginTable* node_origins,
+                                 SourcePositionTable* source_positions);
 
-  void ExecuteCompilation(wasm::WasmFeatures* detected);
-
-  wasm::WasmCode* FinishCompilation(wasm::ErrorThrower*);
+  void ExecuteCompilation(wasm::CompilationEnv*, const wasm::FunctionBody&,
+                          Counters*, wasm::WasmFeatures* detected);
 
  private:
   wasm::WasmCompilationUnit* const wasm_unit_;
-  bool ok_ = true;
-  wasm::WasmCode* wasm_code_ = nullptr;
-  wasm::Result<wasm::DecodeStruct*> graph_construction_result_;
 
   DISALLOW_COPY_AND_ASSIGN(TurbofanWasmCompilationUnit);
 };
@@ -142,7 +140,7 @@ class WasmGraphBuilder {
     kNoExtraCallableParam = false
   };
 
-  WasmGraphBuilder(wasm::ModuleEnv* env, Zone* zone, MachineGraph* mcgraph,
+  WasmGraphBuilder(wasm::CompilationEnv* env, Zone* zone, MachineGraph* mcgraph,
                    wasm::FunctionSig* sig,
                    compiler::SourcePositionTable* spt = nullptr);
 
@@ -163,7 +161,8 @@ class WasmGraphBuilder {
   Node* Start(unsigned params);
   Node* Param(unsigned index);
   Node* Loop(Node* entry);
-  Node* Terminate(Node* effect, Node* control);
+  Node* TerminateLoop(Node* effect, Node* control);
+  Node* TerminateThrow(Node* effect, Node* control);
   Node* Merge(unsigned count, Node** controls);
   Node* Phi(wasm::ValueType type, unsigned count, Node** vals, Node* control);
   Node* CreateOrMergeIntoPhi(MachineRepresentation rep, Node* merge,
@@ -181,7 +180,7 @@ class WasmGraphBuilder {
               wasm::WasmCodePosition position = wasm::kNoCodePosition);
   Node* Unop(wasm::WasmOpcode opcode, Node* input,
              wasm::WasmCodePosition position = wasm::kNoCodePosition);
-  Node* GrowMemory(Node* input);
+  Node* MemoryGrow(Node* input);
   Node* Throw(uint32_t exception_index, const wasm::WasmException* exception,
               const Vector<Node*> values);
   Node* Rethrow(Node* except_obj);
@@ -189,7 +188,7 @@ class WasmGraphBuilder {
   Node* LoadExceptionTagFromTable(uint32_t exception_index);
   Node* GetExceptionTag(Node* except_obj);
   Node** GetExceptionValues(Node* except_obj,
-                            const wasm::WasmException* except_decl);
+                            const wasm::WasmException* exception);
   bool IsPhiWithMerge(Node* phi, Node* merge);
   bool ThrowsException(Node* node, Node** if_success, Node** if_exception);
   void AppendToMerge(Node* merge, Node* from);
@@ -326,7 +325,9 @@ class WasmGraphBuilder {
 
   const wasm::WasmModule* module() { return env_ ? env_->module : nullptr; }
 
-  bool use_trap_handler() const { return env_ && env_->use_trap_handler; }
+  wasm::UseTrapHandler use_trap_handler() const {
+    return env_ ? env_->use_trap_handler : wasm::kNoTrapHandler;
+  }
 
   MachineGraph* mcgraph() { return mcgraph_; }
   Graph* graph();
@@ -341,7 +342,7 @@ class WasmGraphBuilder {
 
   Zone* const zone_;
   MachineGraph* const mcgraph_;
-  wasm::ModuleEnv* const env_;
+  wasm::CompilationEnv* const env_;
 
   Node** control_ = nullptr;
   Node** effect_ = nullptr;
@@ -469,9 +470,10 @@ class WasmGraphBuilder {
   Node* BuildAsmjsStoreMem(MachineType type, Node* index, Node* val);
 
   uint32_t GetExceptionEncodedSize(const wasm::WasmException* exception) const;
-  void BuildEncodeException32BitValue(Node* except_obj, uint32_t* index,
+  void BuildEncodeException32BitValue(Node* values_array, uint32_t* index,
                                       Node* value);
-  Node* BuildDecodeException32BitValue(Node* const* values, uint32_t* index);
+  Node* BuildDecodeException32BitValue(Node* values_array, uint32_t* index);
+  Node* BuildDecodeException64BitValue(Node* values_array, uint32_t* index);
 
   Node** Realloc(Node* const* buffer, size_t old_count, size_t new_count) {
     Node** buf = Buffer(new_count);

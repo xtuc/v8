@@ -22,6 +22,7 @@
 #include "src/base/platform/platform.h"
 #include "src/base/v8-fallthrough.h"
 #include "src/globals.h"
+#include "src/objects/slots.h"
 #include "src/vector.h"
 
 #if defined(V8_OS_AIX)
@@ -160,20 +161,6 @@ template <typename T>
 int HandleObjectPointerCompare(const Handle<T>* a, const Handle<T>* b) {
   return Compare<T*>(*(*a), *(*b));
 }
-
-
-template <typename T, typename U>
-inline bool IsAligned(T value, U alignment) {
-  return (value & (alignment - 1)) == 0;
-}
-
-// Returns true if {addr + offset} is aligned.
-inline bool IsAddressAligned(Address addr,
-                             intptr_t alignment,
-                             int offset = 0) {
-  return IsAligned(addr + offset, alignment);
-}
-
 
 // Returns the maximum of the two parameters.
 template <typename T>
@@ -1127,50 +1114,28 @@ int WriteAsCFile(const char* filename, const char* varname,
 // Memory
 
 // Copies words from |src| to |dst|. The data spans must not overlap.
-template <typename T>
-inline void CopyWords(T* dst, const T* src, size_t num_words) {
-  STATIC_ASSERT(sizeof(T) == kPointerSize);
-  DCHECK(Min(dst, const_cast<T*>(src)) + num_words <=
-         Max(dst, const_cast<T*>(src)));
+// |src| and |dst| must be kPointerSize-aligned.
+inline void CopyWords(Address dst, const Address src, size_t num_words) {
+  DCHECK(IsAligned(dst, kPointerSize));
+  DCHECK(IsAligned(src, kPointerSize));
+  DCHECK(Min(dst, src) + num_words * kPointerSize <= Max(dst, src));
   DCHECK_GT(num_words, 0);
 
   // Use block copying MemCopy if the segment we're copying is
   // enough to justify the extra call/setup overhead.
   static const size_t kBlockCopyLimit = 16;
 
+  Address* dst_ptr = reinterpret_cast<Address*>(dst);
+  Address* src_ptr = reinterpret_cast<Address*>(src);
   if (num_words < kBlockCopyLimit) {
     do {
       num_words--;
-      *dst++ = *src++;
+      *dst_ptr++ = *src_ptr++;
     } while (num_words > 0);
   } else {
-    MemCopy(dst, src, num_words * kPointerSize);
+    MemCopy(dst_ptr, src_ptr, num_words * kPointerSize);
   }
 }
-
-
-// Copies words from |src| to |dst|. No restrictions.
-template <typename T>
-inline void MoveWords(T* dst, const T* src, size_t num_words) {
-  STATIC_ASSERT(sizeof(T) == kPointerSize);
-  DCHECK_GT(num_words, 0);
-
-  // Use block copying MemCopy if the segment we're copying is
-  // enough to justify the extra call/setup overhead.
-  static const size_t kBlockCopyLimit = 16;
-
-  if (num_words < kBlockCopyLimit &&
-      ((dst < src) || (dst >= (src + num_words * kPointerSize)))) {
-    T* end = dst + num_words;
-    do {
-      num_words--;
-      *dst++ = *src++;
-    } while (num_words > 0);
-  } else {
-    MemMove(dst, src, num_words * kPointerSize);
-  }
-}
-
 
 // Copies data from |src| to |dst|.  The data spans must not overlap.
 template <typename T>
@@ -1194,15 +1159,7 @@ inline void CopyBytes(T* dst, const T* src, size_t num_bytes) {
   }
 }
 
-
-template <typename T, typename U>
-inline void MemsetPointer(T** dest, U* value, int counter) {
-#ifdef DEBUG
-  T* a = nullptr;
-  U* b = nullptr;
-  a = b;  // Fake assignment to check assignability.
-  USE(a);
-#endif  // DEBUG
+inline void MemsetPointer(Address* dest, Address value, int counter) {
 #if V8_HOST_ARCH_IA32
 #define STOS "stosl"
 #elif V8_HOST_ARCH_X64
@@ -1232,6 +1189,22 @@ inline void MemsetPointer(T** dest, U* value, int counter) {
 #endif
 
 #undef STOS
+}
+
+template <typename T, typename U>
+inline void MemsetPointer(T** dest, U* value, int counter) {
+#ifdef DEBUG
+  T* a = nullptr;
+  U* b = nullptr;
+  a = b;  // Fake assignment to check assignability.
+  USE(a);
+#endif  // DEBUG
+  MemsetPointer(reinterpret_cast<Address*>(dest),
+                reinterpret_cast<Address>(value), counter);
+}
+
+inline void MemsetPointer(ObjectSlot start, Object* value, int counter) {
+  MemsetPointer(start.location(), reinterpret_cast<Address>(value), counter);
 }
 
 // Simple support to read a file into std::string.

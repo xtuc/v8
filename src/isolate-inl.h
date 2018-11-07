@@ -7,14 +7,13 @@
 
 #include "src/isolate.h"
 #include "src/objects-inl.h"
+#include "src/objects/regexp-match-info.h"
 
 namespace v8 {
 namespace internal {
 
-base::AddressRegion Isolate::root_register_addressable_region() {
-  Address start = reinterpret_cast<Address>(this);
-  Address end = heap_.root_register_addressable_end();
-  return base::AddressRegion(start, end - start);
+IsolateAllocationMode Isolate::isolate_allocation_mode() {
+  return isolate_allocator_->mode();
 }
 
 bool Isolate::FromWritableHeapObject(HeapObject* obj, Isolate** isolate) {
@@ -129,7 +128,7 @@ Isolate::ExceptionScope::~ExceptionScope() {
   Handle<type> Isolate::name() {                             \
     return Handle<type>(raw_native_context()->name(), this); \
   }                                                          \
-  bool Isolate::is_##name(type* value) {                     \
+  bool Isolate::is_##name(type##ArgType value) {             \
     return raw_native_context()->is_##name(value);           \
   }
 NATIVE_CONTEXT_FIELDS(NATIVE_CONTEXT_FIELD_ACCESSOR)

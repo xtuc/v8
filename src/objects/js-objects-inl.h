@@ -13,6 +13,8 @@
 #include "src/lookup-inl.h"
 #include "src/objects/property-array-inl.h"
 #include "src/objects/shared-function-info.h"
+#include "src/objects/slots.h"
+#include "src/objects/smi-inl.h"
 #include "src/prototype.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -126,7 +128,7 @@ void JSObject::EnsureCanContainHeapObjectElements(Handle<JSObject> object) {
 }
 
 void JSObject::EnsureCanContainElements(Handle<JSObject> object,
-                                        Object** objects, uint32_t count,
+                                        ObjectSlot objects, uint32_t count,
                                         EnsureElementsMode mode) {
   ElementsKind current_kind = object->GetElementsKind();
   ElementsKind target_kind = current_kind;
@@ -136,8 +138,8 @@ void JSObject::EnsureCanContainElements(Handle<JSObject> object,
     bool is_holey = IsHoleyElementsKind(current_kind);
     if (current_kind == HOLEY_ELEMENTS) return;
     Object* the_hole = object->GetReadOnlyRoots().the_hole_value();
-    for (uint32_t i = 0; i < count; ++i) {
-      Object* current = *objects++;
+    for (uint32_t i = 0; i < count; ++i, ++objects) {
+      Object* current = *objects;
       if (current == the_hole) {
         is_holey = true;
         target_kind = GetHoleyElementsKind(target_kind);
@@ -175,7 +177,7 @@ void JSObject::EnsureCanContainElements(Handle<JSObject> object,
     if (mode == ALLOW_COPIED_DOUBLE_ELEMENTS) {
       mode = DONT_ALLOW_DOUBLE_ELEMENTS;
     }
-    Object** objects =
+    ObjectSlot objects =
         Handle<FixedArray>::cast(elements)->GetFirstElementAddress();
     EnsureCanContainElements(object, objects, length, mode);
     return;
@@ -266,6 +268,10 @@ Object* JSObject::GetEmbedderField(int index) {
   return READ_FIELD(this, GetHeaderSize() + (kPointerSize * index));
 }
 
+Address JSObject::GetEmbedderFieldRaw(int index) {
+  return GetEmbedderField(index)->ptr();
+}
+
 void JSObject::SetEmbedderField(int index, Object* value) {
   DCHECK(index < GetEmbedderFieldCount() && index >= 0);
   // Internal objects do follow immediately after the header, whereas in-object
@@ -276,13 +282,19 @@ void JSObject::SetEmbedderField(int index, Object* value) {
   WRITE_BARRIER(this, offset, value);
 }
 
-void JSObject::SetEmbedderField(int index, Smi* value) {
+void JSObject::SetEmbedderField(int index, Smi value) {
+  SetEmbedderFieldRaw(index, value->ptr());
+}
+
+void JSObject::SetEmbedderFieldRaw(int index, Address value) {
   DCHECK(index < GetEmbedderFieldCount() && index >= 0);
   // Internal objects do follow immediately after the header, whereas in-object
   // properties are at the end of the object. Therefore there is no need
   // to adjust the index here.
   int offset = GetHeaderSize() + (kPointerSize * index);
-  WRITE_FIELD(this, offset, value);
+  Address field_addr = FIELD_ADDR(this, offset);
+  base::Relaxed_Store(reinterpret_cast<base::AtomicWord*>(field_addr),
+                      static_cast<base::AtomicWord>(value));
 }
 
 bool JSObject::IsUnboxedDoubleField(FieldIndex index) {
@@ -633,7 +645,13 @@ ACCESSORS(JSDate, hour, Object, kHourOffset)
 ACCESSORS(JSDate, min, Object, kMinOffset)
 ACCESSORS(JSDate, sec, Object, kSecOffset)
 
-SMI_ACCESSORS(JSMessageObject, type, kTypeOffset)
+MessageTemplate JSMessageObject::type() const {
+  Object* value = READ_FIELD(this, kTypeOffset);
+  return MessageTemplateFromInt(Smi::ToInt(value));
+}
+void JSMessageObject::set_type(MessageTemplate value) {
+  WRITE_FIELD(this, kTypeOffset, Smi::FromInt(static_cast<int>(value)));
+}
 ACCESSORS(JSMessageObject, argument, Object, kArgumentsOffset)
 ACCESSORS(JSMessageObject, script, Script, kScriptOffset)
 ACCESSORS(JSMessageObject, stack_frames, Object, kStackFramesOffset)
@@ -796,7 +814,7 @@ NameDictionary* JSReceiver::property_dictionary() const {
 
 // TODO(gsathya): Pass isolate directly to this function and access
 // the heap from this.
-PropertyArray* JSReceiver::property_array() const {
+PropertyArray JSReceiver::property_array() const {
   DCHECK(HasFastProperties());
 
   Object* prop = raw_properties_or_hash();

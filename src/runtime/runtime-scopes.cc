@@ -11,8 +11,10 @@
 #include "src/deoptimizer.h"
 #include "src/frames-inl.h"
 #include "src/isolate-inl.h"
-#include "src/messages.h"
+#include "src/message-template.h"
+#include "src/objects/heap-object-inl.h"
 #include "src/objects/module-inl.h"
+#include "src/objects/smi.h"
 #include "src/runtime/runtime-utils.h"
 
 namespace v8 {
@@ -444,7 +446,7 @@ Handle<JSObject> NewSloppyArguments(Isolate* isolate, Handle<JSFunction> callee,
         int parameter = scope_info->ContextLocalParameterNumber(i);
         if (parameter >= mapped_count) continue;
         arguments->set_the_hole(parameter);
-        Smi* slot = Smi::FromInt(Context::MIN_CONTEXT_SLOTS + i);
+        Smi slot = Smi::FromInt(Context::MIN_CONTEXT_SLOTS + i);
         parameter_map->set(parameter + 2, slot);
       }
     } else {
@@ -580,7 +582,10 @@ RUNTIME_FUNCTION(Runtime_NewSloppyArguments) {
 RUNTIME_FUNCTION(Runtime_NewArgumentsElements) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
-  Object** frame = reinterpret_cast<Object**>(args[0]);
+  // Note that args[0] is the address of an array of object pointers (a.k.a.
+  // an ObjectSlot), which looks like a Smi because it's aligned.
+  DCHECK(args[0].IsSmi());
+  ObjectSlot frame(args[0]->ptr());
   CONVERT_SMI_ARG_CHECKED(length, 1);
   CONVERT_SMI_ARG_CHECKED(mapped_count, 2);
   Handle<FixedArray> result =
@@ -593,7 +598,7 @@ RUNTIME_FUNCTION(Runtime_NewArgumentsElements) {
     result->set_the_hole(isolate, index);
   }
   for (int index = number_of_holes; index < length; ++index) {
-    result->set(index, frame[offset - index], mode);
+    result->set(index, *(frame + (offset - index)), mode);
   }
   return *result;
 }

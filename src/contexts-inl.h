@@ -126,15 +126,15 @@ bool Context::HasSameSecurityTokenAs(Context* that) const {
 }
 
 #define NATIVE_CONTEXT_FIELD_ACCESSORS(index, type, name) \
-  void Context::set_##name(type* value) {                 \
+  void Context::set_##name(type##ArgType value) {         \
     DCHECK(IsNativeContext());                            \
     set(index, value);                                    \
   }                                                       \
-  bool Context::is_##name(type* value) const {            \
+  bool Context::is_##name(type##ArgType value) const {    \
     DCHECK(IsNativeContext());                            \
     return type::cast(get(index)) == value;               \
   }                                                       \
-  type* Context::name() const {                           \
+  type##ArgType Context::name() const {                   \
     DCHECK(IsNativeContext());                            \
     return type::cast(get(index));                        \
   }
@@ -216,23 +216,6 @@ Map* Context::GetInitialJSArrayMap(ElementsKind kind) const {
   Object* const initial_js_array_map = get(Context::ArrayMapIndex(kind));
   DCHECK(!initial_js_array_map->IsUndefined());
   return Map::cast(initial_js_array_map);
-}
-
-void NativeContext::AddDirtyJSWeakFactory(
-    JSWeakFactory* weak_factory, Isolate* isolate,
-    std::function<void(HeapObject* object, Object** slot, Object* target)>
-        gc_notify_updated_slot) {
-  DCHECK(dirty_js_weak_factories()->IsUndefined(isolate) ||
-         dirty_js_weak_factories()->IsJSWeakFactory());
-  weak_factory->set_next(dirty_js_weak_factories());
-  gc_notify_updated_slot(
-      weak_factory,
-      HeapObject::RawField(weak_factory, JSWeakFactory::kNextOffset),
-      dirty_js_weak_factories());
-  set_dirty_js_weak_factories(weak_factory);
-  int offset = kHeaderSize + DIRTY_JS_WEAK_FACTORIES_INDEX * kPointerSize;
-  gc_notify_updated_slot(this, HeapObject::RawField(this, offset),
-                         weak_factory);
 }
 
 }  // namespace internal

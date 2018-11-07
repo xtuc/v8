@@ -9,7 +9,11 @@
 #ifndef V8_OBJECTS_JS_DATE_TIME_FORMAT_H_
 #define V8_OBJECTS_JS_DATE_TIME_FORMAT_H_
 
+#include <set>
+#include <string>
+
 #include "src/isolate.h"
+#include "src/objects/intl-objects.h"
 #include "src/objects/managed.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -18,7 +22,7 @@
 namespace U_ICU_NAMESPACE {
 class Locale;
 class SimpleDateFormat;
-}
+}  // namespace U_ICU_NAMESPACE
 
 namespace v8 {
 namespace internal {
@@ -65,7 +69,9 @@ class JSDateTimeFormat : public JSObject {
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> ToLocaleDateTime(
       Isolate* isolate, Handle<Object> date, Handle<Object> locales,
       Handle<Object> options, RequiredOption required, DefaultsOption defaults,
-      const char* service);
+      Intl::CacheType cache_type);
+
+  static std::set<std::string> GetAvailableLocales();
 
   DECL_CAST(JSDateTimeFormat)
 

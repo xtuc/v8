@@ -6,7 +6,7 @@
 #include "src/bootstrapper.h"
 #include "src/debug/debug.h"
 #include "src/isolate-inl.h"
-#include "src/messages.h"
+#include "src/message-template.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/property-descriptor-object.h"
@@ -40,7 +40,7 @@ MaybeHandle<Object> Runtime::GetObjectProperty(Isolate* isolate,
   if (is_found_out) *is_found_out = it.IsFound();
 
   if (!it.IsFound() && key->IsSymbol() &&
-      Symbol::cast(*key)->is_private_field()) {
+      Symbol::cast(*key)->is_private_name()) {
     THROW_NEW_ERROR(
         isolate,
         NewTypeError(MessageTemplate::kInvalidPrivateFieldAccess, key, object),
@@ -358,7 +358,7 @@ MaybeHandle<Object> Runtime::SetObjectProperty(Isolate* isolate,
   if (!success) return MaybeHandle<Object>();
 
   if (!it.IsFound() && key->IsSymbol() &&
-      Symbol::cast(*key)->is_private_field()) {
+      Symbol::cast(*key)->is_private_name()) {
     THROW_NEW_ERROR(
         isolate,
         NewTypeError(MessageTemplate::kInvalidPrivateFieldAccess, key, object),
@@ -1215,7 +1215,7 @@ RUNTIME_FUNCTION(Runtime_AddPrivateField) {
   CONVERT_ARG_HANDLE_CHECKED(JSReceiver, o, 0);
   CONVERT_ARG_HANDLE_CHECKED(Symbol, key, 1);
   CONVERT_ARG_HANDLE_CHECKED(Object, value, 2);
-  DCHECK(key->is_private_field());
+  DCHECK(key->is_private_name());
 
   LookupIterator it =
       LookupIterator::PropertyOrElement(isolate, o, key, LookupIterator::OWN);

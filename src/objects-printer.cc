@@ -38,6 +38,7 @@
 #include "src/objects/js-regexp-string-iterator-inl.h"
 #ifdef V8_INTL_SUPPORT
 #include "src/objects/js-relative-time-format-inl.h"
+#include "src/objects/js-segment-iterator-inl.h"
 #include "src/objects/js-segmenter-inl.h"
 #endif  // V8_INTL_SUPPORT
 #include "src/objects/js-weak-refs-inl.h"
@@ -84,6 +85,19 @@ void HeapObject::PrintHeader(std::ostream& os, const char* id) {  // NOLINT
   os << "]";
   MemoryChunk* chunk = MemoryChunk::FromAddress(
       reinterpret_cast<Address>(const_cast<HeapObject*>(this)));
+  if (chunk->owner()->identity() == OLD_SPACE) os << " in OldSpace";
+  if (!IsMap()) os << "\n - map: " << Brief(map());
+}
+
+void HeapObjectPtr::PrintHeader(std::ostream& os, const char* id) {  // NOLINT
+  os << reinterpret_cast<void*>(ptr()) << ": [";
+  if (id != nullptr) {
+    os << id;
+  } else {
+    os << map()->instance_type();
+  }
+  os << "]";
+  MemoryChunk* chunk = MemoryChunk::FromAddress(ptr());
   if (chunk->owner()->identity() == OLD_SPACE) os << " in OldSpace";
   if (!IsMap()) os << "\n - map: " << Brief(map());
 }
@@ -193,6 +207,7 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case JS_API_OBJECT_TYPE:
     case JS_SPECIAL_API_OBJECT_TYPE:
     case JS_CONTEXT_EXTENSION_OBJECT_TYPE:
+    case JS_ASYNC_FUNCTION_OBJECT_TYPE:
     case JS_ASYNC_GENERATOR_OBJECT_TYPE:
     case JS_ARGUMENTS_TYPE:
     case JS_ERROR_TYPE:
@@ -270,6 +285,7 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
       JSMapIterator::cast(this)->JSMapIteratorPrint(os);
       break;
     case JS_WEAK_CELL_TYPE:
+    case JS_WEAK_REF_TYPE:
       JSWeakCell::cast(this)->JSWeakCellPrint(os);
       break;
     case JS_WEAK_FACTORY_TYPE:
@@ -354,6 +370,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
       JSRelativeTimeFormat::cast(this)->JSRelativeTimeFormatPrint(os);
       break;
+    case JS_INTL_SEGMENT_ITERATOR_TYPE:
+      JSSegmentIterator::cast(this)->JSSegmentIteratorPrint(os);
+      break;
     case JS_INTL_SEGMENTER_TYPE:
       JSSegmenter::cast(this)->JSSegmenterPrint(os);
       break;
@@ -420,7 +439,8 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
 }
 
 void ByteArray::ByteArrayPrint(std::ostream& os) {  // NOLINT
-  os << "byte array, data starts at " << GetDataStartAddress();
+  os << "byte array, data starts at "
+     << static_cast<void*>(GetDataStartAddress());
 }
 
 void BytecodeArray::BytecodeArrayPrint(std::ostream& os) {  // NOLINT
@@ -750,7 +770,7 @@ void JSGeneratorObject::JSGeneratorObjectPrint(std::ostream& os) {  // NOLINT
     }
   }
   os << "\n - register file: " << Brief(parameters_and_registers());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSArray::JSArrayPrint(std::ostream& os) {  // NOLINT
@@ -768,7 +788,7 @@ void JSPromise::JSPromisePrint(std::ostream& os) {  // NOLINT
     os << "\n - result: " << Brief(result());
   }
   os << "\n - has_handler: " << has_handler();
-  os << "\n ";
+  JSObjectPrintBody(os, this);
 }
 
 void JSRegExp::JSRegExpPrint(std::ostream& os) {  // NOLINT
@@ -797,7 +817,6 @@ void Symbol::SymbolPrint(std::ostream& os) {  // NOLINT
     os << " (" << PrivateSymbolToName() << ")";
   }
   os << "\n - private: " << is_private();
-  os << "\n";
 }
 
 void Map::MapPrint(std::ostream& os) {  // NOLINT
@@ -862,7 +881,7 @@ void Map::MapPrint(std::ostream& os) {  // NOLINT
     if (nof_transitions > 0) {
       os << "\n - transitions #" << nof_transitions << ": ";
       HeapObject* heap_object;
-      Smi* smi;
+      Smi smi;
       if (raw_transitions()->ToSmi(&smi)) {
         os << Brief(smi);
       } else if (raw_transitions()->GetHeapObject(&heap_object)) {
@@ -929,8 +948,9 @@ void PrintHashTableWithHeader(std::ostream& os, T* table, const char* type) {
 template <typename T>
 void PrintWeakArrayElements(std::ostream& os, T* array) {
   // Print in array notation for non-sparse arrays.
-  MaybeObject* previous_value = array->length() > 0 ? array->Get(0) : nullptr;
-  MaybeObject* value = nullptr;
+  MaybeObject previous_value =
+      array->length() > 0 ? array->Get(0) : MaybeObject(kNullAddress);
+  MaybeObject value;
   int previous_index = 0;
   int i;
   for (i = 1; i <= array->length(); i++) {
@@ -974,7 +994,7 @@ void ObjectBoilerplateDescription::ObjectBoilerplateDescriptionPrint(
 }
 
 void PropertyArray::PropertyArrayPrint(std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, "PropertyArray");
+  PrintHeader(os, "PropertyArray");
   os << "\n - length: " << length();
   os << "\n - hash: " << Hash();
   PrintFixedArrayElements(os, this);
@@ -1158,7 +1178,7 @@ void JSValue::JSValuePrint(std::ostream& os) {  // NOLINT
 
 void JSMessageObject::JSMessageObjectPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, this, "JSMessageObject");
-  os << "\n - type: " << type();
+  os << "\n - type: " << static_cast<int>(type());
   os << "\n - arguments: " << Brief(argument());
   os << "\n - start_position: " << start_position();
   os << "\n - end_position: " << end_position();
@@ -1257,44 +1277,51 @@ void JSMap::JSMapPrint(std::ostream& os) {  // NOLINT
 }
 
 void JSCollectionIterator::JSCollectionIteratorPrint(
-    std::ostream& os) {  // NOLINT
+    std::ostream& os, const char* name) {  // NOLINT
+  JSObjectPrintHeader(os, this, name);
   os << "\n - table: " << Brief(table());
   os << "\n - index: " << Brief(index());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSSetIterator::JSSetIteratorPrint(std::ostream& os) {  // NOLINT
-  JSObjectPrintHeader(os, this, "JSSetIterator");
-  JSCollectionIteratorPrint(os);
+  JSCollectionIteratorPrint(os, "JSSetIterator");
 }
 
 void JSMapIterator::JSMapIteratorPrint(std::ostream& os) {  // NOLINT
-  JSObjectPrintHeader(os, this, "JSMapIterator");
-  JSCollectionIteratorPrint(os);
+  JSCollectionIteratorPrint(os, "JSMapIterator");
 }
 
 void JSWeakCell::JSWeakCellPrint(std::ostream& os) {
   JSObjectPrintHeader(os, this, "JSWeakCell");
   os << "\n - factory: " << Brief(factory());
   os << "\n - target: " << Brief(target());
+  os << "\n - holdings: " << Brief(holdings());
   os << "\n - prev: " << Brief(prev());
   os << "\n - next: " << Brief(next());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSWeakFactory::JSWeakFactoryPrint(std::ostream& os) {
   JSObjectPrintHeader(os, this, "JSWeakFactory");
+  os << "\n - native_context: " << Brief(native_context());
   os << "\n - cleanup: " << Brief(cleanup());
   os << "\n - active_cells: " << Brief(active_cells());
   os << "\n - cleared_cells: " << Brief(cleared_cells());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSWeakFactoryCleanupIterator::JSWeakFactoryCleanupIteratorPrint(
     std::ostream& os) {
   JSObjectPrintHeader(os, this, "JSWeakFactoryCleanupIterator");
   os << "\n - factory: " << Brief(factory());
-  os << "\n";
+  JSObjectPrintBody(os, this);
+}
+
+void WeakFactoryCleanupJobTask::WeakFactoryCleanupJobTaskPrint(
+    std::ostream& os) {
+  HeapObject::PrintHeader(os, "WeakFactoryCleanupJobTask");
+  os << "\n - factory: " << Brief(factory());
 }
 
 void JSWeakMap::JSWeakMapPrint(std::ostream& os) {  // NOLINT
@@ -1378,16 +1405,8 @@ void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
 
   // Print Builtin name for builtin functions
   int builtin_index = code()->builtin_index();
-  if (builtin_index != -1 && !IsInterpreted()) {
-    if (builtin_index == Builtins::kDeserializeLazy) {
-      if (shared()->HasBuiltinId()) {
-        builtin_index = shared()->builtin_id();
-        os << "\n - builtin: " << isolate->builtins()->name(builtin_index)
-           << "(lazy)";
-      }
-    } else {
-      os << "\n - builtin: " << isolate->builtins()->name(builtin_index);
-    }
+  if (Builtins::IsBuiltinId(builtin_index) && !IsInterpreted()) {
+    os << "\n - builtin: " << isolate->builtins()->name(builtin_index);
   }
 
   os << "\n - formal_parameter_count: "
@@ -2002,7 +2021,7 @@ void JSCollator::JSCollatorPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, this, "JSCollator");
   os << "\n - icu collator: " << Brief(icu_collator());
   os << "\n - bound compare: " << Brief(bound_compare());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSDateTimeFormat::JSDateTimeFormatPrint(std::ostream& os) {  // NOLINT
@@ -2010,7 +2029,7 @@ void JSDateTimeFormat::JSDateTimeFormatPrint(std::ostream& os) {  // NOLINT
   os << "\n - icu locale: " << Brief(icu_locale());
   os << "\n - icu simple date format: " << Brief(icu_simple_date_format());
   os << "\n - bound format: " << Brief(bound_format());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSListFormat::JSListFormatPrint(std::ostream& os) {  // NOLINT
@@ -2019,11 +2038,11 @@ void JSListFormat::JSListFormatPrint(std::ostream& os) {  // NOLINT
   os << "\n - style: " << StyleAsString();
   os << "\n - type: " << TypeAsString();
   os << "\n - icu formatter: " << Brief(icu_formatter());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSLocale::JSLocalePrint(std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, "JSLocale");
+  JSObjectPrintHeader(os, this, "JSLocale");
   os << "\n - language: " << Brief(language());
   os << "\n - script: " << Brief(script());
   os << "\n - region: " << Brief(region());
@@ -2045,17 +2064,16 @@ void JSNumberFormat::JSNumberFormatPrint(std::ostream& os) {  // NOLINT
   os << "\n - bound_format: " << Brief(bound_format());
   os << "\n - style: " << StyleAsString();
   os << "\n - currency_display: " << CurrencyDisplayAsString();
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSPluralRules::JSPluralRulesPrint(std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, "JSPluralRules");
-  JSObjectPrint(os);
+  JSObjectPrintHeader(os, this, "JSPluralRules");
   os << "\n - locale: " << Brief(locale());
-  os << "\n - type: " << Brief(type());
+  os << "\n - type: " << TypeAsString();
   os << "\n - icu plural rules: " << Brief(icu_plural_rules());
   os << "\n - icu decimal format: " << Brief(icu_decimal_format());
-  os << "\n";
+  JSObjectPrintBody(os, this);
 }
 
 void JSRelativeTimeFormat::JSRelativeTimeFormatPrint(
@@ -2068,13 +2086,21 @@ void JSRelativeTimeFormat::JSRelativeTimeFormatPrint(
   os << "\n";
 }
 
+void JSSegmentIterator::JSSegmentIteratorPrint(std::ostream& os) {  // NOLINT
+  JSObjectPrintHeader(os, this, "JSSegmentIterator");
+  os << "\n - icu break iterator: " << Brief(icu_break_iterator());
+  os << "\n - unicode string: " << Brief(unicode_string());
+  os << "\n - granularity: " << GranularityAsString();
+  os << "\n";
+}
+
 void JSSegmenter::JSSegmenterPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, this, "JSSegmenter");
   os << "\n - locale: " << Brief(locale());
   os << "\n - granularity: " << GranularityAsString();
   os << "\n - lineBreakStyle: " << LineBreakStyleAsString();
-  os << "\n - icubreak iterator: " << Brief(icu_break_iterator());
-  os << "\n";
+  os << "\n - icu break iterator: " << Brief(icu_break_iterator());
+  JSObjectPrintBody(os, this);
 }
 #endif  // V8_INTL_SUPPORT
 
@@ -2265,7 +2291,7 @@ void MaybeObject::Print() {
 }
 
 void MaybeObject::Print(std::ostream& os) {
-  Smi* smi;
+  Smi smi;
   HeapObject* heap_object;
   if (ToSmi(&smi)) {
     smi->SmiPrint(os);
@@ -2352,7 +2378,7 @@ void DescriptorArray::PrintDescriptorDetails(std::ostream& os, int descriptor,
   os << " @ ";
   switch (details.location()) {
     case kField: {
-      FieldType* field_type = GetFieldType(descriptor);
+      FieldType field_type = GetFieldType(descriptor);
       field_type->PrintTo(os);
       break;
     }

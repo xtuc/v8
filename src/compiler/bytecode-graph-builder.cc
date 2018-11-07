@@ -17,6 +17,7 @@
 #include "src/objects/js-array-inl.h"
 #include "src/objects/js-generator.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/objects/smi.h"
 #include "src/vector-slot-pair.h"
 
 namespace v8 {
@@ -903,9 +904,20 @@ void BytecodeGraphBuilder::VisitBytecodes() {
     AdvanceToOsrEntryAndPeelLoops(&iterator, &source_position_iterator);
   }
 
+  bool has_one_shot_bytecode = false;
   for (; !iterator.done(); iterator.Advance()) {
+    if (interpreter::Bytecodes::IsOneShotBytecode(
+            iterator.current_bytecode())) {
+      has_one_shot_bytecode = true;
+    }
     VisitSingleBytecode(&source_position_iterator);
   }
+
+  if (has_one_shot_bytecode) {
+    isolate()->CountUsage(
+        v8::Isolate::UseCounterFeature::kOptimizedFunctionWithOneShotBytecode);
+  }
+
   set_bytecode_analysis(nullptr);
   set_bytecode_iterator(nullptr);
   DCHECK(exception_handlers_.empty());
@@ -1681,7 +1693,7 @@ void BytecodeGraphBuilder::VisitGetTemplateObject() {
   FeedbackNexus nexus(feedback_vector(), slot);
 
   Handle<JSArray> cached_value;
-  if (nexus.GetFeedback() == MaybeObject::FromSmi(Smi::kZero)) {
+  if (nexus.GetFeedback() == MaybeObject::FromSmi(Smi::zero())) {
     // It's not observable when the template object is created, so we
     // can just create it eagerly during graph building and bake in
     // the JSArray constant here.
