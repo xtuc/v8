@@ -36,7 +36,8 @@ TF_BUILTIN(ToBigInt64, BigIntBuiltinsAssembler) {
     /* Node* base = IntPtrConstant(0); */
     /* Node* pointerSize = IntPtrConstant(kPointerSize); */
 
-    /* StoreNoWriteBarrier(MachineRepresentation::kWord32, base, var_low.value()); */
+    /* StoreNoWriteBarrier(MachineRepresentation::kWord32, base,
+     *                     var_low.value()); */
     /* StoreNoWriteBarrier( */
     /*     MachineRepresentation::kWord32, IntPtrAdd(base, pointerSize), */
     /*     var_high.value()); */
