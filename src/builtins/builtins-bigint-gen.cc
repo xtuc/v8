@@ -33,8 +33,15 @@ TF_BUILTIN(ToBigInt64, BigIntBuiltinsAssembler) {
     // 3. If int64bit ≥ 263, return int64bit - 264; otherwise return int64bit.
     ReturnRaw(Signed(var_low.value()));
   } else {
-    // TODO(sven): return a int32 pair. It seems that wasm don't support
-    // 32bits yet?
+    /* Node* base = IntPtrConstant(0); */
+    /* Node* pointerSize = IntPtrConstant(kPointerSize); */
+
+    /* StoreNoWriteBarrier(MachineRepresentation::kWord32, base, var_low.value()); */
+    /* StoreNoWriteBarrier( */
+    /*     MachineRepresentation::kWord32, IntPtrAdd(base, pointerSize), */
+    /*     var_high.value()); */
+
+    /* ReturnRaw(base); */
     UNIMPLEMENTED();
   }
 }
