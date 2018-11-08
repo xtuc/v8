@@ -107,13 +107,21 @@ function assertTypeOfBigInt(x) {
 
   global.value = 123n;
   assertEquals(global.valueOf(), 123n);
+
+  global.value = 2n ** 63n;
+  assertEquals(global.valueOf(), - (2n ** 63n));
 })();
 
 (function TestInvalidValtypeGlobalErrorMessage() {
   var argument = { "value": "Nintendo64" };
   assertThrows(() => new WebAssembly.Global(argument));
 
-  // TOOD(sven): test against the new error message? or match it?
+  try {
+    new WebAssembly.Global(argument);
+  } catch (e) {
+    assertContains("'value' must be", e.message);
+    assertContains("i64", e.message);
+  }
 })();
 
 (function TestGlobalI64SetWrongType() {
@@ -135,4 +143,3 @@ function assertTypeOfBigInt(x) {
 
   assertThrows(() => module.exports.f(123n), TypeError);
 })();
-
