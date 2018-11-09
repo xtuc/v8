@@ -16,6 +16,7 @@
 #include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-result.h"
 #include "src/zone/zone.h"
+#include "src/code-stub-assembler.h"
 
 namespace v8 {
 namespace internal {
@@ -142,6 +143,7 @@ class WasmGraphBuilder {
 
   WasmGraphBuilder(wasm::CompilationEnv* env, Zone* zone, MachineGraph* mcgraph,
                    wasm::FunctionSig* sig,
+                   CodeStubAssembler* code_stub_assembler,
                    compiler::SourcePositionTable* spt = nullptr);
 
   Node** Buffer(size_t count) {
@@ -365,6 +367,8 @@ class WasmGraphBuilder {
 
   compiler::WasmDecorator* decorator_ = nullptr;
 
+  CodeStubAssembler* const code_stub_assembler_;
+
   compiler::SourcePositionTable* const source_position_table_ = nullptr;
 
   Node* NoContextConstant();
@@ -501,6 +505,9 @@ V8_EXPORT_PRIVATE CallDescriptor* GetWasmCallDescriptor(
         WasmGraphBuilder::kNoRetpoline,
     WasmGraphBuilder::ExtraCallableParam callable_param =
         WasmGraphBuilder::kNoExtraCallableParam);
+
+V8_EXPORT_PRIVATE CallDescriptor* GetI32WasmNewBigInt(
+    Zone* zone, CallDescriptor* call_descriptor);
 
 V8_EXPORT_PRIVATE CallDescriptor* GetI32WasmCallDescriptor(
     Zone* zone, CallDescriptor* call_descriptor);

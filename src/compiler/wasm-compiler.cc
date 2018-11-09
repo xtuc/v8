@@ -51,6 +51,7 @@
 #include "src/wasm/wasm-objects-inl.h"
 #include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-text.h"
+#include "src/code-stub-assembler.h"
 
 namespace v8 {
 namespace internal {
@@ -156,6 +157,7 @@ bool ContainsInt64(wasm::FunctionSig* sig) {
 WasmGraphBuilder::WasmGraphBuilder(
     wasm::CompilationEnv* env, Zone* zone, MachineGraph* mcgraph,
     wasm::FunctionSig* sig,
+    CodeStubAssembler* code_stub_assembler,
     compiler::SourcePositionTable* source_position_table)
     : zone_(zone),
       mcgraph_(mcgraph),
@@ -165,6 +167,7 @@ WasmGraphBuilder::WasmGraphBuilder(
       has_simd_(ContainsSimd(sig)),
       untrusted_code_mitigations_(FLAG_untrusted_code_mitigations),
       sig_(sig),
+      code_stub_assembler_(code_stub_assembler),
       source_position_table_(source_position_table) {
   DCHECK_IMPLIES(use_trap_handler(), trap_handler::IsTrapHandlerEnabled());
   DCHECK_NOT_NULL(mcgraph_);
@@ -3516,6 +3519,7 @@ Signature<MachineRepresentation>* CreateMachineSignature(
 
 void WasmGraphBuilder::LowerInt64() {
   if (mcgraph()->machine()->Is64()) return;
+  PrintF("LowerInt64\n");
   Int64Lowering r(mcgraph()->graph(), mcgraph()->machine(), mcgraph()->common(),
                   mcgraph()->zone(),
                   CreateMachineSignature(mcgraph()->zone(), sig_));
@@ -4132,9 +4136,10 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
  public:
   WasmWrapperGraphBuilder(Zone* zone, wasm::CompilationEnv* env,
                           JSGraph* jsgraph, wasm::FunctionSig* sig,
+                          CodeStubAssembler* code_stub_assembler,
                           compiler::SourcePositionTable* spt,
                           StubCallMode stub_mode)
-      : WasmGraphBuilder(env, zone, jsgraph, sig, spt),
+      : WasmGraphBuilder(env, zone, jsgraph, sig, code_stub_assembler, spt),
         isolate_(jsgraph->isolate()),
         jsgraph_(jsgraph),
         stub_mode_(stub_mode),
@@ -4422,6 +4427,13 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
         Operator::kNoProperties,                        // properties
         stub_mode_);                                    // stub call mode
 
+    if (mcgraph()->machine()->Is32()) {
+      input = Int32Constant(0);
+      PrintF("input\n");
+      input->Print();
+      /* call_descriptor = GetI32WasmNewBigInt(mcgraph()->zone(), call_descriptor); */
+    }
+
     Node* target = (stub_mode_ == StubCallMode::kCallWasmRuntimeStub)
                        ? mcgraph()->RelocatableIntPtrConstant(
                              wasm::WasmCode::kWasmNewBigInt,
@@ -4435,24 +4447,49 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
   }
 
   Node* BuildChangeBigIntToInt64(Node* input, Node* context) {
-    DCHECK_NE(stub_mode_, StubCallMode::kCallWasmRuntimeStub);
+    DCHECK_NOT_NULL(code_stub_assembler_);
 
-    JavaScriptToWasmTypeConversionDescriptor interface_descriptor;
+    CodeAssembler::TVariable<UintPtrT> var_low(this);
+    CodeAssembler::TVariable<UintPtrT> var_high(this);
 
-    auto call_descriptor = Linkage::GetStubCallDescriptor(
-        mcgraph()->zone(),                              // zone
-        interface_descriptor,                           // descriptor
-        interface_descriptor.GetStackParameterCount(),  // stack parameter count
-        CallDescriptor::kNoFlags,                       // flags
-        Operator::kNoProperties,                        // properties
-        StubCallMode::kCallOnHeapBuiltin);              // stub call mode
+    TNode<BigInt> bigint = code_stub_assembler_->ToBigInt(context, input);
 
-    Node* target = jsgraph()->HeapConstant(BUILTIN_CODE(isolate_, ToBigInt64));
+    // 2. Let int64bit be n modulo 2^64.
+    // 3. If int64bit ≥ 2^63, return int64bit - 2^64;
+    code_stub_assembler_->BigIntToRawBytes(bigint, &var_low, &var_high);
 
-    return SetEffect(
-        SetControl(graph()->NewNode(mcgraph()->common()->Call(call_descriptor),
-                                    target, input, context, Effect(),
-                                    Control())));
+    if (code_stub_assembler_->Is64()) {
+      return code_stub_assembler_->Signed(var_low.value());
+    } else {
+      UNREACHABLE();
+    }
+
+    /* DCHECK_NE(stub_mode_, StubCallMode::kCallWasmRuntimeStub); */
+
+    /* JavaScriptToWasmTypeConversionDescriptor interface_descriptor; */
+
+    /* auto call_descriptor = Linkage::GetStubCallDescriptor( */
+    /*     mcgraph()->zone(),                              // zone */
+    /*     interface_descriptor,                           // descriptor */
+    /*     interface_descriptor.GetStackParameterCount(),  // stack parameter count */
+    /*     CallDescriptor::kNoFlags,                       // flags */
+    /*     Operator::kNoProperties,                        // properties */
+    /*     StubCallMode::kCallOnHeapBuiltin);              // stub call mode */
+
+    /* Node* target = jsgraph()->HeapConstant(BUILTIN_CODE(isolate_, ToBigInt64)); */
+
+    /* Node* res = SetEffect( */
+    /*     SetControl(graph()->NewNode(mcgraph()->common()->Call(call_descriptor), */
+    /*                                 target, input, context, Effect(), */
+    /*                                 Control()))); */
+
+    /* // in 32 bits mode, we stored the int64 as two int32 */
+    /* if (mcgraph()->machine()->Is32()) { */
+    /*   PrintF("i32\n"); */
+    /*   return LOAD_RAW(res, 0, MachineType::Int64()); */
+    /* } */
+
+    /* return res; */
   }
 
   Node* FromJS(Node* node, Node* js_context, wasm::ValueType type,
@@ -4486,6 +4523,7 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
         }
 
         num = BuildChangeBigIntToInt64(node, js_context);
+
         break;
       }
       case wasm::kWasmF32:
@@ -4639,6 +4677,8 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
                                             : ToJS(rets[0], sig_->GetReturn(),
                                                    enabled_features_.bigint);
     Return(jsval);
+
+    if (ContainsInt64(sig_)) LowerInt64();
   }
 
   bool BuildWasmImportCallWrapper(WasmImportCallKind kind) {
@@ -4834,6 +4874,8 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     BuildModifyThreadInWasmFlag(true);  // reentering WASM upon return.
 
     Return(val);
+
+    if (ContainsInt64(sig_)) LowerInt64();
     return true;
   }
 
@@ -5016,10 +5058,23 @@ MaybeHandle<Code> CompileJSToWasmWrapper(Isolate* isolate,
   Node* control = nullptr;
   Node* effect = nullptr;
 
+  static constexpr size_t kMaxNameLen = 128;
+  char debug_name[kMaxNameLen] = "js_to_wasm:";
+  AppendSignature(debug_name, kMaxNameLen, sig);
+
+  int params = static_cast<int>(sig->parameter_count());
+
+  compiler::CodeAssemblerState state(
+      isolate, &zone, params, Code::JS_TO_WASM_FUNCTION, debug_name,
+      PoisoningMitigationLevel::kPoisonCriticalOnly);
+
+  CodeStubAssembler code_stub_assembler(&state);
+
   wasm::CompilationEnv env(nullptr, wasm::kNoTrapHandler,
                            wasm::kRuntimeExceptionSupport);
-  WasmWrapperGraphBuilder builder(&zone, &env, &jsgraph, sig, nullptr,
-                                  StubCallMode::kCallOnHeapBuiltin);
+  WasmWrapperGraphBuilder builder(
+      &zone, &env, &jsgraph, sig, &code_stub_assembler, nullptr,
+      StubCallMode::kCallOnHeapBuiltin);
   builder.set_control_ptr(&control);
   builder.set_effect_ptr(&effect);
   builder.BuildJSToWasmWrapper(is_import);
@@ -5027,12 +5082,8 @@ MaybeHandle<Code> CompileJSToWasmWrapper(Isolate* isolate,
   //----------------------------------------------------------------------------
   // Run the compilation pipeline.
   //----------------------------------------------------------------------------
-  static constexpr size_t kMaxNameLen = 128;
-  char debug_name[kMaxNameLen] = "js_to_wasm:";
-  AppendSignature(debug_name, kMaxNameLen, sig);
 
   // Schedule and compile to machine code.
-  int params = static_cast<int>(sig->parameter_count());
   CallDescriptor* incoming = Linkage::GetJSCallDescriptor(
       &zone, false, params + 1, CallDescriptor::kNoFlags);
 
@@ -5124,20 +5175,28 @@ MaybeHandle<Code> CompileWasmImportCallWrapper(Isolate* isolate,
   Node* control = nullptr;
   Node* effect = nullptr;
 
+  const char* func_name = "wasm-to-js";
+  int params = static_cast<int>(sig->parameter_count());
+
   SourcePositionTable* source_position_table =
       source_positions ? new (&zone) SourcePositionTable(&graph) : nullptr;
 
   wasm::CompilationEnv env(nullptr, wasm::kNoTrapHandler,
                            wasm::kRuntimeExceptionSupport);
 
+  compiler::CodeAssemblerState state(
+      isolate, &zone, params, Code::WASM_TO_JS_FUNCTION, func_name,
+      PoisoningMitigationLevel::kPoisonCriticalOnly);
+
+  CodeStubAssembler code_stub_assembler(&state);
+
   WasmWrapperGraphBuilder builder(&zone, &env, &jsgraph, sig,
+                                  &code_stub_assembler,
                                   source_position_table,
                                   StubCallMode::kCallWasmRuntimeStub);
   builder.set_control_ptr(&control);
   builder.set_effect_ptr(&effect);
   builder.BuildWasmImportCallWrapper(kind);
-
-  const char* func_name = "wasm-to-js";
 
   // Schedule and compile to machine code.
   CallDescriptor* incoming =
@@ -5187,8 +5246,20 @@ MaybeHandle<Code> CompileWasmInterpreterEntry(Isolate* isolate,
   Node* control = nullptr;
   Node* effect = nullptr;
 
-  WasmWrapperGraphBuilder builder(&zone, nullptr, &jsgraph, sig, nullptr,
-                                  StubCallMode::kCallWasmRuntimeStub);
+  EmbeddedVector<char, 32> func_name;
+  func_name.Truncate(
+      SNPrintF(func_name, "wasm-interpreter-entry#%d", func_index));
+
+  int params = static_cast<int>(sig->parameter_count());
+
+  compiler::CodeAssemblerState state(
+      isolate, &zone, params, Code::WASM_TO_JS_FUNCTION, func_name.start(),
+      PoisoningMitigationLevel::kPoisonCriticalOnly);
+
+  CodeStubAssembler code_stub_assembler(&state);
+
+  WasmWrapperGraphBuilder builder(&zone, nullptr, &jsgraph, sig, &code_stub_assembler,
+                                  nullptr, StubCallMode::kCallWasmRuntimeStub);
   builder.set_control_ptr(&control);
   builder.set_effect_ptr(&effect);
   builder.BuildWasmInterpreterEntry(func_index);
@@ -5198,10 +5269,6 @@ MaybeHandle<Code> CompileWasmInterpreterEntry(Isolate* isolate,
   if (machine.Is32()) {
     incoming = GetI32WasmCallDescriptor(&zone, incoming);
   }
-
-  EmbeddedVector<char, 32> func_name;
-  func_name.Truncate(
-      SNPrintF(func_name, "wasm-interpreter-entry#%d", func_index));
 
   MaybeHandle<Code> maybe_code = Pipeline::GenerateCodeForWasmStub(
       isolate, incoming, &graph, Code::WASM_INTERPRETER_ENTRY,
@@ -5239,7 +5306,21 @@ MaybeHandle<Code> CompileCWasmEntry(Isolate* isolate, wasm::FunctionSig* sig) {
   Node* control = nullptr;
   Node* effect = nullptr;
 
-  WasmWrapperGraphBuilder builder(&zone, nullptr, &jsgraph, sig, nullptr,
+  // Build a name in the form "c-wasm-entry:<params>:<returns>".
+  static constexpr size_t kMaxNameLen = 128;
+  char debug_name[kMaxNameLen] = "c-wasm-entry:";
+  AppendSignature(debug_name, kMaxNameLen, sig);
+
+  int params = static_cast<int>(sig->parameter_count());
+
+  compiler::CodeAssemblerState state(
+      isolate, &zone, params, Code::WASM_TO_JS_FUNCTION, debug_name,
+      PoisoningMitigationLevel::kPoisonCriticalOnly);
+
+  CodeStubAssembler code_stub_assembler(&state);
+
+  WasmWrapperGraphBuilder builder(&zone, nullptr, &jsgraph, sig,
+                                  &code_stub_assembler, nullptr,
                                   StubCallMode::kCallOnHeapBuiltin);
   builder.set_control_ptr(&control);
   builder.set_effect_ptr(&effect);
@@ -5249,11 +5330,6 @@ MaybeHandle<Code> CompileCWasmEntry(Isolate* isolate, wasm::FunctionSig* sig) {
   CallDescriptor* incoming = Linkage::GetJSCallDescriptor(
       &zone, false, CWasmEntryParameters::kNumParameters + 1,
       CallDescriptor::kNoFlags);
-
-  // Build a name in the form "c-wasm-entry:<params>:<returns>".
-  static constexpr size_t kMaxNameLen = 128;
-  char debug_name[kMaxNameLen] = "c-wasm-entry:";
-  AppendSignature(debug_name, kMaxNameLen, sig);
 
   MaybeHandle<Code> maybe_code = Pipeline::GenerateCodeForWasmStub(
       isolate, incoming, &graph, Code::C_WASM_ENTRY, debug_name,
@@ -5289,9 +5365,11 @@ bool TurbofanWasmCompilationUnit::BuildGraphForWasmFunction(
     decode_timer.Start();
   }
 
+  CodeStubAssembler* code_stub_assembler = nullptr;
+
   // Create a TF graph during decoding.
   WasmGraphBuilder builder(env, mcgraph->zone(), mcgraph, func_body.sig,
-                           source_positions);
+                           code_stub_assembler, source_positions);
   wasm::VoidResult graph_construction_result = wasm::BuildTFGraph(
       wasm_unit_->wasm_engine_->allocator(),
       wasm_unit_->native_module_->enabled_features(), env->module, &builder,
@@ -5592,6 +5670,14 @@ CallDescriptor* ReplaceTypeInCallDescriptorWith(
       rets.NumStackSlots() - params.NumStackSlots());  // stack_return_count
 }
 }  // namespace
+
+CallDescriptor* GetI32WasmNewBigInt(Zone* zone,
+                                    CallDescriptor* call_descriptor) {
+  UNIMPLEMENTED();
+  /* return ReplaceTypeInCallDescriptorWith(zone, call_descriptor, 2, */
+  /*                                        MachineType::Int64(), */
+  /*                                        MachineRepresentation::kWord32); */
+}
 
 CallDescriptor* GetI32WasmCallDescriptor(Zone* zone,
                                          CallDescriptor* call_descriptor) {

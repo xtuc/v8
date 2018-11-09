@@ -16,6 +16,7 @@ class BigIntBuiltinsAssembler : public CodeStubAssembler {
 };
 
 // https://tc39.github.io/proposal-bigint/#sec-to-big-int64
+// FIXME(sven): remove that
 TF_BUILTIN(ToBigInt64, BigIntBuiltinsAssembler) {
   TVARIABLE(UintPtrT, var_low);
   TVARIABLE(UintPtrT, var_high);
@@ -27,30 +28,28 @@ TF_BUILTIN(ToBigInt64, BigIntBuiltinsAssembler) {
   TNode<BigInt>bigint = ToBigInt(CAST(context), CAST(value));
 
   // 2. Let int64bit be n modulo 2^64.
+  // 3. If int64bit ≥ 2^63, return int64bit - 2^64;
   BigIntToRawBytes(bigint, &var_low, &var_high);
 
+  // otherwise return int64bit
   if (Is64()) {
-    // 3. If int64bit ≥ 263, return int64bit - 264; otherwise return int64bit.
     ReturnRaw(Signed(var_low.value()));
   } else {
-    /* Node* base = IntPtrConstant(0); */
-    /* Node* pointerSize = IntPtrConstant(kPointerSize); */
+    TNode<IntPtrT> int32_t_size = IntPtrConstant(sizeof(int32_t));
+    TNode<HeapObject> ptr = AllocateInNewSpace(IntPtrAdd(int32_t_size, int32_t_size));
 
-    /* StoreNoWriteBarrier(MachineRepresentation::kWord32, base,
-     *                     var_low.value()); */
-    /* StoreNoWriteBarrier( */
-    /*     MachineRepresentation::kWord32, IntPtrAdd(base, pointerSize), */
-    /*     var_high.value()); */
+    StoreNoWriteBarrier(MachineRepresentation::kWord32, ptr, var_low.value());
+    StoreNoWriteBarrier(
+        MachineRepresentation::kWord32, ptr, int32_t_size, var_high.value());
 
-    /* ReturnRaw(base); */
-    UNIMPLEMENTED();
+    ReturnRaw(ptr);
   }
 }
 
 // https://tc39.github.io/proposal-bigint/#sec-bigint-constructor-number-value
-// TODO(sven): only implemented for int64, trap otherwise
+// TODO(sven): only implemented for int64
+// FIXME(sven): this seems duplicated, could we call Runtime::kToBigInt directly?
 TF_BUILTIN(NewBigInt, BigIntBuiltinsAssembler) {
-  // FIXME(sven): test value trap otherwise
   TVARIABLE(BigInt, value_bigint);
 
   // input

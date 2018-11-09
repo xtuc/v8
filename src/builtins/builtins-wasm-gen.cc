@@ -54,6 +54,35 @@ class WasmBuiltinsAssembler : public CodeStubAssembler {
   }
 };
 
+TNode<Code> WasmBuiltinsAssembler::ToBigInt64(Node* context, Node* value) {
+  TVARIABLE(UintPtrT, var_low);
+  TVARIABLE(UintPtrT, var_high);
+
+  // input
+  Node* value = Parameter(Descriptor::kArgument);
+  Node* context = Parameter(Descriptor::kContext);
+
+  TNode<BigInt>bigint = ToBigInt(CAST(context), CAST(value));
+
+  // 2. Let int64bit be n modulo 2^64.
+  // 3. If int64bit ≥ 2^63, return int64bit - 2^64;
+  BigIntToRawBytes(bigint, &var_low, &var_high);
+
+  /* // otherwise return int64bit */
+  /* if (Is64()) { */
+  /*   ReturnRaw(Signed(var_low.value())); */
+  /* } else { */
+  /*   TNode<IntPtrT> int32_t_size = IntPtrConstant(sizeof(int32_t)); */
+  /*   TNode<HeapObject> ptr = AllocateInNewSpace(IntPtrAdd(int32_t_size, int32_t_size)); */
+
+  /*   StoreNoWriteBarrier(MachineRepresentation::kWord32, ptr, var_low.value()); */
+  /*   StoreNoWriteBarrier( */
+  /*       MachineRepresentation::kWord32, ptr, int32_t_size, var_high.value()); */
+
+  /*   ReturnRaw(ptr); */
+  /* } */
+}
+
 TF_BUILTIN(WasmAllocateHeapNumber, WasmBuiltinsAssembler) {
   TNode<Code> target = LoadBuiltinFromFrame(Builtins::kAllocateHeapNumber);
   TailCallStub(AllocateHeapNumberDescriptor(), target, NoContextConstant());
